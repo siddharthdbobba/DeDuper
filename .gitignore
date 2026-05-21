@@ -1,0 +1,46 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Xcode user-specific
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+DerivedData/
+*.xcscmblueprint
+*.xccheckout
+
+# Build output
+build/
+*.o
+*.lo
+*.la
+*.al
+*.libs
+*.so
+*.so.[0-9]*
+*.a
+*.pyc
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+.build/
+
+# CocoaPods (not in use, but ignore if added later)
+Pods/
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Secrets / local config
+*.env
+.env.local
+secrets.plist
