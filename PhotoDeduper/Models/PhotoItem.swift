@@ -3,11 +3,18 @@ import Photos
 import CoreGraphics
 import ImageIO
 
-/// Unified photo representation that works for both Photos library assets and file-system images.
+/// Unified photo (and video) representation that works for both Photos library
+/// assets and file-system items.
 struct PhotoItem: Identifiable {
     enum Source {
         case asset(PHAsset)
         case fileURL(URL)
+    }
+
+    enum MediaKind {
+        case still
+        case livePhoto
+        case video
     }
 
     let id: String
@@ -15,34 +22,94 @@ struct PhotoItem: Identifiable {
     let creationDate: Date?
     let pixelWidth: Int
     let pixelHeight: Int
+    let mediaKind: MediaKind
+    let isFavorite: Bool
+    let burstIdentifier: String?
+    /// Duration in seconds for videos; nil for stills.
+    let duration: Double?
+    /// On-disk byte size when readily available. For PHAssets this is filled in lazily.
+    let fileByteSize: Int64?
+
+    /// True iff this item should never be marked for deletion. Driven by the
+    /// PHAsset favorite flag at the moment but extensible to user-marked
+    /// protected items in the future.
+    var isProtected: Bool { isFavorite }
+
+    var isVideo: Bool { mediaKind == .video }
+
+    /// Width-to-height ratio for layout. Falls back to 1:1 for videos and any
+    /// item whose dimensions weren't resolved (pixelWidth or pixelHeight == 0).
+    var aspectRatio: CGFloat {
+        guard pixelWidth > 0, pixelHeight > 0 else { return 1 }
+        return CGFloat(pixelWidth) / CGFloat(pixelHeight)
+    }
 
     static func from(_ asset: PHAsset) -> PhotoItem {
-        PhotoItem(
+        let kind: MediaKind
+        switch asset.mediaType {
+        case .video:
+            kind = .video
+        case .image:
+            kind = asset.mediaSubtypes.contains(.photoLive) ? .livePhoto : .still
+        default:
+            kind = .still
+        }
+        return PhotoItem(
             id: asset.localIdentifier,
             source: .asset(asset),
             creationDate: asset.creationDate,
             pixelWidth: asset.pixelWidth,
-            pixelHeight: asset.pixelHeight
+            pixelHeight: asset.pixelHeight,
+            mediaKind: kind,
+            isFavorite: asset.isFavorite,
+            burstIdentifier: asset.burstIdentifier,
+            duration: asset.mediaType == .video ? asset.duration : nil,
+            fileByteSize: nil
         )
     }
 
     static func from(url: URL) -> PhotoItem {
+        let ext = url.pathExtension.lowercased()
+        if PhotoItem.videoExtensions.contains(ext) {
+            // Skip the AVAsset sync calls (deprecated in macOS 13) — dimensions
+            // and duration aren't required for dedup. We still capture file size
+            // and creation date from the file system.
+            let resourceValues = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey])
+            return PhotoItem(
+                id: url.absoluteString,
+                source: .fileURL(url),
+                creationDate: resourceValues?.creationDate,
+                pixelWidth: 0,
+                pixelHeight: 0,
+                mediaKind: .video,
+                isFavorite: false,
+                burstIdentifier: nil,
+                duration: nil,
+                fileByteSize: resourceValues?.fileSize.map { Int64($0) }
+            )
+        }
         let meta = imageMetadata(url: url)
         return PhotoItem(
             id: url.absoluteString,
             source: .fileURL(url),
             creationDate: meta.date,
             pixelWidth: meta.width,
-            pixelHeight: meta.height
+            pixelHeight: meta.height,
+            mediaKind: .still,
+            isFavorite: false,
+            burstIdentifier: nil,
+            duration: nil,
+            fileByteSize: meta.size
         )
     }
 
     // MARK: - Helpers
 
-    private static func imageMetadata(url: URL) -> (date: Date?, width: Int, height: Int) {
+    private static func imageMetadata(url: URL) -> (date: Date?, width: Int, height: Int, size: Int64?) {
         var date: Date?
         var width = 0
         var height = 0
+        var size: Int64?
 
         if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] {
@@ -55,11 +122,12 @@ struct PhotoItem: Identifiable {
             }
         }
         // Fall back to file system creation date.
-        if date == nil {
-            date = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-        }
-        return (date, width, height)
+        let resourceValues = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey])
+        if date == nil { date = resourceValues?.creationDate }
+        if let sizeBytes = resourceValues?.fileSize { size = Int64(sizeBytes) }
+        return (date, width, height, size)
     }
+
 }
 
 private let exifDateFormatter: DateFormatter = {
@@ -68,7 +136,7 @@ private let exifDateFormatter: DateFormatter = {
     return fmt
 }()
 
-// MARK: - Supported image extensions
+// MARK: - Supported extensions
 
 extension PhotoItem {
     static let imageExtensions: Set<String> = [
@@ -76,4 +144,10 @@ extension PhotoItem {
         "raw", "cr2", "cr3", "nef", "arw", "dng",
         "raf", "orf", "rw2", "tif", "tiff"
     ]
+
+    static let videoExtensions: Set<String> = [
+        "mov", "mp4", "m4v", "avi", "mkv"
+    ]
+
+    static let supportedExtensions: Set<String> = imageExtensions.union(videoExtensions)
 }

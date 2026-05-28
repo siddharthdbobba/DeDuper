@@ -4,38 +4,49 @@ struct ConfirmDeleteSheet: View {
     @ObservedObject var viewModel: ReviewViewModel
     @Environment(\.dismiss) private var dismiss
 
+    private var isHoldForReview: Bool {
+        UserDefaults.standard.bool(forKey: "holdForReview")
+    }
+
     var body: some View {
         VStack(spacing: 24) {
-            Image(systemName: "trash.circle.fill")
+            Image(systemName: isHoldForReview ? "tray.full" : "trash.circle.fill")
                 .font(.system(size: 64))
-                .foregroundStyle(.red)
+                .foregroundStyle(isHoldForReview ? .blue : .red)
 
-            Text("Confirm Deletion")
+            Text(isHoldForReview ? "Stage for Review" : "Confirm Deletion")
                 .font(.title2.bold())
 
             statsGrid
 
-            Text("Deleted photos move to **Recently Deleted** and can be recovered for 30 days.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+            if isHoldForReview {
+                Text("These photos will be added to a **\(BatchDeleteManager.reviewAlbumName)** album in Photos. They stay in your library; you can audit them later and delete from there.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("Deleted photos move to **Recently Deleted** and can be recovered for 30 days. File-system images move to the macOS Trash.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
 
             HStack(spacing: 14) {
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
 
-                Button("Delete \(viewModel.totalToDelete) Photos") {
+                Button(isHoldForReview ? "Stage \(viewModel.totalToDelete) Photos" : "Delete \(viewModel.totalToDelete) Photos") {
                     dismiss()
                     Task { await viewModel.confirmDelete() }
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .tint(isHoldForReview ? .blue : .red)
                 .keyboardShortcut(.defaultAction)
             }
         }
         .padding(36)
-        .frame(width: 420)
+        .frame(width: 460)
     }
 
     private var statsGrid: some View {

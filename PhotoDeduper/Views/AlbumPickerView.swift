@@ -33,7 +33,9 @@ struct AlbumPickerView: View {
                 }
             }
         }
+#if os(macOS)
         .frame(minWidth: 420, minHeight: 500)
+#endif
         .task { await loadAlbums() }
     }
 
@@ -125,13 +127,13 @@ struct AlbumPickerView: View {
 
 struct AlbumThumbnailView: View {
     let collection: PHAssetCollection
-    @State private var image: NSImage?
+    @State private var image: PlatformImage?
     @State private var requestID: PHImageRequestID?
 
     var body: some View {
         Group {
             if let image {
-                Image(nsImage: image).resizable().scaledToFill()
+                Image(platformImage: image).resizable().scaledToFill()
             } else {
                 Rectangle()
                     .fill(.quaternary)
@@ -168,9 +170,9 @@ struct AlbumThumbnailView: View {
             targetSize: CGSize(width: 104, height: 104),
             contentMode: .aspectFill,
             options: imgOptions
-        ) { nsImage, _ in
-            if let nsImage {
-                Task { @MainActor in self.image = nsImage }
+        ) { image, _ in
+            if let image {
+                Task { @MainActor in self.image = image }
             }
         }
     }

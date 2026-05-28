@@ -69,6 +69,9 @@ struct OpenAIReviewer {
         req.httpBody = bodyData
 
         let (data, response) = try await URLSession.shared.data(for: req)
+        guard data.count <= 1_048_576 else {
+            throw ReviewerError.parseFailed
+        }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw ReviewerError.httpError(http.statusCode, GroqReviewer.extractAPIError(from: data))
         }

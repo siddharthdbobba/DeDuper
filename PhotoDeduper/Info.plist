@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>PhotoDeduper</string>
+	<string>DeDuper</string>
 	<key>CFBundleDisplayName</key>
-	<string>Photo Deduper</string>
+	<string>DeDuper</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleVersion</key>
@@ -19,8 +19,10 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Photo Deduper needs access to your photo library to find and remove duplicate photos from your trips.</string>
+	<string>DeDuper needs access to your photo library to find and remove duplicate photos from your trips.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

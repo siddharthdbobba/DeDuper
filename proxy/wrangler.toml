@@ -1,0 +1,18 @@
+name = "photodeduper-proxy"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# KV namespace for rate limiting.
+# After running `wrangler kv:namespace create RATE_LIMIT_KV`, replace the
+# placeholder IDs below with the real ones from the command output.
+[[kv_namespaces]]
+binding     = "RATE_LIMIT_KV"
+id          = "8d00c9d2c1a94598bed455077851b35d"
+preview_id  = "09147ceb6b934d21839a6713c850f96f"
+
+# Secrets are NOT stored here — set them with:
+#   wrangler secret put OPENAI_API_KEY
+#   wrangler secret put APP_HMAC_SECRET
+#
+# APP_HMAC_SECRET is the 64-char lowercase hex printed during app setup:
+#   03ea66656af9d5eae84b16c5293c14d7bcf43ed676b8c022bdd52ddbea821830

@@ -8,57 +8,86 @@
 
 /* Begin PBXBuildFile section */
 		0A6071641DFD5CDF9FD27DC9 /* PhotoLibraryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF3AC16EA303C9C38E092321 /* PhotoLibraryManager.swift */; };
+		0DD520CC3BAEF1B1C1D4FC1F /* AuditLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E843ACCE28CDE3518E5813 /* AuditLogger.swift */; };
+		0E91FDC9A0119009183C3DA6 /* AppConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0C49FF9BE7700324239A743 /* AppConfig.swift */; };
+		0F62A5C4B03786CE00EDDF6C /* GroqReviewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1D468C3B599ED89AB385B2 /* GroqReviewer.swift */; };
 		118503E6C98D2FB342B6FCC6 /* AlbumPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B7B9353E1FA83698E01FF7E /* AlbumPickerView.swift */; };
+		1501D06E267A88DC6FAAE633 /* LibraryPhotoPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A0F11DEDF292B4FD806198 /* LibraryPhotoPicker.swift */; };
 		233E4DF711DAA7DDEA769D09 /* PhotoCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38B15E463FC2372068F93152 /* PhotoCard.swift */; };
 		247AE4ED82D2FEF94F392BC4 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4275D8C2C43CBD3CCD583C3F /* SettingsView.swift */; };
 		2FED8B91ABA9798B7B11765D /* GroupRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F29167246B3AEC2E483B40AC /* GroupRow.swift */; };
 		37C75552AD13E1647123BE58 /* DoneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9FC44672FA7ADF3FFD517C /* DoneView.swift */; };
+		3DCAC91D41687D58BD8A0F76 /* FaceToFaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1AFB75E1DB855600922BD8C /* FaceToFaceView.swift */; };
 		4B42DF770B58D8AD0962765B /* PhotoItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E7CD0AC495949A9C5C16BF /* PhotoItem.swift */; };
+		4CF5C0A3B47619C18627B044 /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF8074E99C061239AF3FDC8D /* PaywallView.swift */; };
+		5321219DDE5CEBB9A2FBE4D0 /* EntitlementStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = E58C804FA94923EC32BB11A0 /* EntitlementStore.swift */; };
 		53243185EF35C151ADCFFEE7 /* ReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71510E482102AEEE22A2841 /* ReviewView.swift */; };
 		54D85228C62A7CD7AB96B342 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F02C827192B5126EBF43E0D0 /* SplashView.swift */; };
 		57AD4BA25A5F2ACE299ACBE7 /* ReviewViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 081794D3BBB871DEAF66F5A5 /* ReviewViewModel.swift */; };
 		59711AE865EF3B51B4C15740 /* ConfirmDeleteSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D13E10F2DDC92FC4D966D8F2 /* ConfirmDeleteSheet.swift */; };
+		5C2F61AE91DB4901B38F9C74 /* LicenseKeyEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 454DC219F93D410B8960D08E /* LicenseKeyEntryView.swift */; };
 		698E4788CECB78BB5D1557E2 /* PhotoAlbum.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7030E703C5F4C317F2B2C833 /* PhotoAlbum.swift */; };
+		6AE7ED700AC63DBE3509669D /* ThumbnailCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E9A239E6D4A007CE7540FFA /* ThumbnailCache.swift */; };
 		6DE0D1D03AFADFD8359BA592 /* PhotoDeduperApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06D887F3BE6BF27C433807E3 /* PhotoDeduperApp.swift */; };
 		6E5193F4B02122C4A67F9276 /* PhotoScorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04B851DE24620944C600CE5A /* PhotoScorer.swift */; };
 		7177AE66C71FB7D64840670F /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C15B1EB0171228F3CEA604 /* KeychainHelper.swift */; };
+		723A726190329648A5372BF5 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6671751020BBE97327AD7F0B /* Assets.xcassets */; };
+		7B38148E4E214B15B621D779 /* LemonSqueezyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DC3A7FBDDC74B0F8A036C62 /* LemonSqueezyManager.swift */; };
+		85641A7B1A4B5B2CDB87DB42 /* VideoHasher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80802232FE9D6BAF9311C706 /* VideoHasher.swift */; };
 		8D53132C054364F6F754B071 /* AIReviewResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = C120FA195361234ABE644FCD /* AIReviewResult.swift */; };
+		904187B6C81F72B5BEC09D3C /* FaceAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBE7010E6FA07D2848B3DB7 /* FaceAnalyzer.swift */; };
 		971D59F531322C6EEAADB558 /* ClaudeReviewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AF25A09E2808F0598E7882 /* ClaudeReviewer.swift */; };
 		A1BE912B088B05933327EC03 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1037FDB804E92F4B97311911 /* ContentView.swift */; };
 		C2DB5DA575EFCDA10681AAF6 /* ScanProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5DB94B99E5FB4A9187E525 /* ScanProgressView.swift */; };
 		CBDB4FC6ECE22D23E62B6E3A /* PhotoLightboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7FEC0BA794DBBA7D10D7D3A /* PhotoLightboxView.swift */; };
+		D43E552480BD6DF6ED970089 /* PlatformImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26CB007DF574046E27DD145E /* PlatformImage.swift */; };
 		DA4A6DBDC2F2A6FD9FFC5BBE /* BatchDeleteManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE87BEED2FD8802184232C19 /* BatchDeleteManager.swift */; };
 		E3E20B246464A8EDE49820EB /* OpenAIReviewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AAC4F453E1C57E34E7B1BE6 /* OpenAIReviewer.swift */; };
-		A1B2C3D4E5F6789012345678 /* GroqReviewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5061728394A5B6C /* GroqReviewer.swift */; };
 		F2B2CD2C16DCB2C5B005BA16 /* SimilarityGrouper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A798DD02BC6A1CE6B1F81F9 /* SimilarityGrouper.swift */; };
+		FD3F20659F421FE1B0C4E298 /* ProxyReviewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4739D017755DA906B0B1765 /* ProxyReviewer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		04B851DE24620944C600CE5A /* PhotoScorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoScorer.swift; sourceTree = "<group>"; };
 		06D887F3BE6BF27C433807E3 /* PhotoDeduperApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoDeduperApp.swift; sourceTree = "<group>"; };
 		081794D3BBB871DEAF66F5A5 /* ReviewViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewViewModel.swift; sourceTree = "<group>"; };
+		0DBE7010E6FA07D2848B3DB7 /* FaceAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceAnalyzer.swift; sourceTree = "<group>"; };
 		1037FDB804E92F4B97311911 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		1A798DD02BC6A1CE6B1F81F9 /* SimilarityGrouper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimilarityGrouper.swift; sourceTree = "<group>"; };
+		2001FBEE9574473BBB74941D /* DeDuper.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = DeDuper.storekit; sourceTree = "<group>"; };
 		25AF25A09E2808F0598E7882 /* ClaudeReviewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeReviewer.swift; sourceTree = "<group>"; };
+		26CB007DF574046E27DD145E /* PlatformImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformImage.swift; sourceTree = "<group>"; };
 		2C5DB94B99E5FB4A9187E525 /* ScanProgressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanProgressView.swift; sourceTree = "<group>"; };
 		38B15E463FC2372068F93152 /* PhotoCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoCard.swift; sourceTree = "<group>"; };
 		414B95387CD0CE6097554F99 /* PhotoDeduper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhotoDeduper.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4275D8C2C43CBD3CCD583C3F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		454DC219F93D410B8960D08E /* LicenseKeyEntryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenseKeyEntryView.swift; sourceTree = "<group>"; };
+		4E9A239E6D4A007CE7540FFA /* ThumbnailCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailCache.swift; sourceTree = "<group>"; };
+		5E1D468C3B599ED89AB385B2 /* GroqReviewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroqReviewer.swift; sourceTree = "<group>"; };
+		6671751020BBE97327AD7F0B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6AAC4F453E1C57E34E7B1BE6 /* OpenAIReviewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAIReviewer.swift; sourceTree = "<group>"; };
-		B1C2D3E4F5061728394A5B6C /* GroqReviewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroqReviewer.swift; sourceTree = "<group>"; };
 		6B7B9353E1FA83698E01FF7E /* AlbumPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumPickerView.swift; sourceTree = "<group>"; };
 		7030E703C5F4C317F2B2C833 /* PhotoAlbum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoAlbum.swift; sourceTree = "<group>"; };
+		74E843ACCE28CDE3518E5813 /* AuditLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuditLogger.swift; sourceTree = "<group>"; };
 		7E9FC44672FA7ADF3FFD517C /* DoneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneView.swift; sourceTree = "<group>"; };
+		80802232FE9D6BAF9311C706 /* VideoHasher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoHasher.swift; sourceTree = "<group>"; };
+		9DC3A7FBDDC74B0F8A036C62 /* LemonSqueezyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LemonSqueezyManager.swift; sourceTree = "<group>"; };
 		A4C15B1EB0171228F3CEA604 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		A71510E482102AEEE22A2841 /* ReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewView.swift; sourceTree = "<group>"; };
+		B0C49FF9BE7700324239A743 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
+		B3A0F11DEDF292B4FD806198 /* LibraryPhotoPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryPhotoPicker.swift; sourceTree = "<group>"; };
 		C120FA195361234ABE644FCD /* AIReviewResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIReviewResult.swift; sourceTree = "<group>"; };
 		C7FEC0BA794DBBA7D10D7D3A /* PhotoLightboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLightboxView.swift; sourceTree = "<group>"; };
 		CE87BEED2FD8802184232C19 /* BatchDeleteManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BatchDeleteManager.swift; sourceTree = "<group>"; };
 		D13E10F2DDC92FC4D966D8F2 /* ConfirmDeleteSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfirmDeleteSheet.swift; sourceTree = "<group>"; };
+		D1AFB75E1DB855600922BD8C /* FaceToFaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FaceToFaceView.swift; sourceTree = "<group>"; };
 		D1E7CD0AC495949A9C5C16BF /* PhotoItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoItem.swift; sourceTree = "<group>"; };
+		DF8074E99C061239AF3FDC8D /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
+		E58C804FA94923EC32BB11A0 /* EntitlementStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntitlementStore.swift; sourceTree = "<group>"; };
 		EF3AC16EA303C9C38E092321 /* PhotoLibraryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoLibraryManager.swift; sourceTree = "<group>"; };
 		F02C827192B5126EBF43E0D0 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		F29167246B3AEC2E483B40AC /* GroupRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupRow.swift; sourceTree = "<group>"; };
+		F4739D017755DA906B0B1765 /* ProxyReviewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProxyReviewer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -78,7 +107,11 @@
 				6B7B9353E1FA83698E01FF7E /* AlbumPickerView.swift */,
 				D13E10F2DDC92FC4D966D8F2 /* ConfirmDeleteSheet.swift */,
 				7E9FC44672FA7ADF3FFD517C /* DoneView.swift */,
+				D1AFB75E1DB855600922BD8C /* FaceToFaceView.swift */,
 				F29167246B3AEC2E483B40AC /* GroupRow.swift */,
+				B3A0F11DEDF292B4FD806198 /* LibraryPhotoPicker.swift */,
+				DF8074E99C061239AF3FDC8D /* PaywallView.swift */,
+				454DC219F93D410B8960D08E /* LicenseKeyEntryView.swift */,
 				38B15E463FC2372068F93152 /* PhotoCard.swift */,
 				C7FEC0BA794DBBA7D10D7D3A /* PhotoLightboxView.swift */,
 				A71510E482102AEEE22A2841 /* ReviewView.swift */,
@@ -116,6 +149,7 @@
 		9122FD14891DF045E5BEC8E9 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				B0C49FF9BE7700324239A743 /* AppConfig.swift */,
 				1037FDB804E92F4B97311911 /* ContentView.swift */,
 				06D887F3BE6BF27C433807E3 /* PhotoDeduperApp.swift */,
 			);
@@ -126,6 +160,7 @@
 			isa = PBXGroup;
 			children = (
 				A4C15B1EB0171228F3CEA604 /* KeychainHelper.swift */,
+				26CB007DF574046E27DD145E /* PlatformImage.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -133,13 +168,20 @@
 		A4E51D5EE28F73DCB8F0FEF3 /* Managers */ = {
 			isa = PBXGroup;
 			children = (
+				74E843ACCE28CDE3518E5813 /* AuditLogger.swift */,
 				CE87BEED2FD8802184232C19 /* BatchDeleteManager.swift */,
+				9DC3A7FBDDC74B0F8A036C62 /* LemonSqueezyManager.swift */,
 				25AF25A09E2808F0598E7882 /* ClaudeReviewer.swift */,
-				B1C2D3E4F5061728394A5B6C /* GroqReviewer.swift */,
+				E58C804FA94923EC32BB11A0 /* EntitlementStore.swift */,
+				0DBE7010E6FA07D2848B3DB7 /* FaceAnalyzer.swift */,
+				5E1D468C3B599ED89AB385B2 /* GroqReviewer.swift */,
 				6AAC4F453E1C57E34E7B1BE6 /* OpenAIReviewer.swift */,
 				EF3AC16EA303C9C38E092321 /* PhotoLibraryManager.swift */,
 				04B851DE24620944C600CE5A /* PhotoScorer.swift */,
+				F4739D017755DA906B0B1765 /* ProxyReviewer.swift */,
 				1A798DD02BC6A1CE6B1F81F9 /* SimilarityGrouper.swift */,
+				4E9A239E6D4A007CE7540FFA /* ThumbnailCache.swift */,
+				80802232FE9D6BAF9311C706 /* VideoHasher.swift */,
 			);
 			path = Managers;
 			sourceTree = "<group>";
@@ -147,6 +189,8 @@
 		CC9467B81C94ED9BE67A0E1C /* PhotoDeduper */ = {
 			isa = PBXGroup;
 			children = (
+				2001FBEE9574473BBB74941D /* DeDuper.storekit */,
+				6671751020BBE97327AD7F0B /* Assets.xcassets */,
 				9122FD14891DF045E5BEC8E9 /* App */,
 				A4E51D5EE28F73DCB8F0FEF3 /* Managers */,
 				21A07E637BA07C3E9C05CE05 /* Models */,
@@ -165,6 +209,7 @@
 			buildConfigurationList = 26E13E49D1DD6FCE1D622929 /* Build configuration list for PBXNativeTarget "PhotoDeduper" */;
 			buildPhases = (
 				3BB1BDC8CFBD79BB8D71BBA8 /* Sources */,
+				0B9EB2F0A0569B3DFE86EED9 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -184,10 +229,10 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2650;
+				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					AC2A069BFE1641DB8863591E = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 4WCQHY38RP;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -211,6 +256,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		0B9EB2F0A0569B3DFE86EED9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				723A726190329648A5372BF5 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		3BB1BDC8CFBD79BB8D71BBA8 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -218,15 +274,24 @@
 			files = (
 				8D53132C054364F6F754B071 /* AIReviewResult.swift in Sources */,
 				118503E6C98D2FB342B6FCC6 /* AlbumPickerView.swift in Sources */,
+				0E91FDC9A0119009183C3DA6 /* AppConfig.swift in Sources */,
+				0DD520CC3BAEF1B1C1D4FC1F /* AuditLogger.swift in Sources */,
+				7B38148E4E214B15B621D779 /* LemonSqueezyManager.swift in Sources */,
+				5C2F61AE91DB4901B38F9C74 /* LicenseKeyEntryView.swift in Sources */,
 				DA4A6DBDC2F2A6FD9FFC5BBE /* BatchDeleteManager.swift in Sources */,
 				971D59F531322C6EEAADB558 /* ClaudeReviewer.swift in Sources */,
-				A1B2C3D4E5F6789012345678 /* GroqReviewer.swift in Sources */,
 				59711AE865EF3B51B4C15740 /* ConfirmDeleteSheet.swift in Sources */,
 				A1BE912B088B05933327EC03 /* ContentView.swift in Sources */,
 				37C75552AD13E1647123BE58 /* DoneView.swift in Sources */,
+				5321219DDE5CEBB9A2FBE4D0 /* EntitlementStore.swift in Sources */,
+				904187B6C81F72B5BEC09D3C /* FaceAnalyzer.swift in Sources */,
+				3DCAC91D41687D58BD8A0F76 /* FaceToFaceView.swift in Sources */,
+				0F62A5C4B03786CE00EDDF6C /* GroqReviewer.swift in Sources */,
 				2FED8B91ABA9798B7B11765D /* GroupRow.swift in Sources */,
 				7177AE66C71FB7D64840670F /* KeychainHelper.swift in Sources */,
+				1501D06E267A88DC6FAAE633 /* LibraryPhotoPicker.swift in Sources */,
 				E3E20B246464A8EDE49820EB /* OpenAIReviewer.swift in Sources */,
+				4CF5C0A3B47619C18627B044 /* PaywallView.swift in Sources */,
 				698E4788CECB78BB5D1557E2 /* PhotoAlbum.swift in Sources */,
 				233E4DF711DAA7DDEA769D09 /* PhotoCard.swift in Sources */,
 				6DE0D1D03AFADFD8359BA592 /* PhotoDeduperApp.swift in Sources */,
@@ -234,12 +299,16 @@
 				0A6071641DFD5CDF9FD27DC9 /* PhotoLibraryManager.swift in Sources */,
 				CBDB4FC6ECE22D23E62B6E3A /* PhotoLightboxView.swift in Sources */,
 				6E5193F4B02122C4A67F9276 /* PhotoScorer.swift in Sources */,
+				D43E552480BD6DF6ED970089 /* PlatformImage.swift in Sources */,
+				FD3F20659F421FE1B0C4E298 /* ProxyReviewer.swift in Sources */,
 				53243185EF35C151ADCFFEE7 /* ReviewView.swift in Sources */,
 				57AD4BA25A5F2ACE299ACBE7 /* ReviewViewModel.swift in Sources */,
 				C2DB5DA575EFCDA10681AAF6 /* ScanProgressView.swift in Sources */,
 				247AE4ED82D2FEF94F392BC4 /* SettingsView.swift in Sources */,
 				F2B2CD2C16DCB2C5B005BA16 /* SimilarityGrouper.swift in Sources */,
 				54D85228C62A7CD7AB96B342 /* SplashView.swift in Sources */,
+				6AE7ED700AC63DBE3509669D /* ThumbnailCache.swift in Sources */,
+				85641A7B1A4B5B2CDB87DB42 /* VideoHasher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -250,21 +319,22 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PhotoDeduper/PhotoDeduper.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PhotoDeduper/PhotoDeduper.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = YES;
+				DEVELOPMENT_TEAM = 4WCQHY38RP;
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;
 				INFOPLIST_FILE = PhotoDeduper/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				"INFOPLIST_FILE[sdk=iphoneos*]" = "PhotoDeduper/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "PhotoDeduper/Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.photodeduper.app;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -302,11 +372,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -315,12 +383,11 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SDKROOT = auto;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DIRECT_DISTRIBUTION;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -331,21 +398,22 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PhotoDeduper/PhotoDeduper.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PhotoDeduper/PhotoDeduper.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				COMBINE_HIDPI_IMAGES = YES;
-				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = "";
-				ENABLE_HARDENED_RUNTIME = YES;
+				DEVELOPMENT_TEAM = 4WCQHY38RP;
+				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;
 				INFOPLIST_FILE = PhotoDeduper/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
+				"INFOPLIST_FILE[sdk=iphoneos*]" = "PhotoDeduper/Info-iOS.plist";
+				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "PhotoDeduper/Info-iOS.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.photodeduper.app;
-				SDKROOT = macosx;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "macosx iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -383,11 +451,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -402,13 +468,11 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SDKROOT = auto;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;

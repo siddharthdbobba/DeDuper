@@ -3,24 +3,62 @@ import CoreGraphics
 
 class SimilarityGrouper {
 
-    // MARK: - Time-based grouping
+    // MARK: - Time + burst grouping
 
-    func groupByTime(_ items: [PhotoItem], windowSeconds: Double = 30) -> [[PhotoItem]] {
-        var groups: [[PhotoItem]] = []
-        var current: [PhotoItem] = []
-
+    /// Groups photos by `PHAsset.burstIdentifier` first (a single iOS burst
+    /// belongs together regardless of time), then by time window for everything
+    /// else.
+    ///
+    /// Returns a named tuple so callers can tag burst groups as `.burst` and
+    /// time-window groups as `.timeWindow` without guessing after the fact.
+    /// Single-item "bursts" (only one copy in the library) fall through to the
+    /// time-window pass rather than being silently dropped.
+    func groupByTime(_ items: [PhotoItem], windowSeconds: Double = 30)
+        -> (burst: [[PhotoItem]], time: [[PhotoItem]])
+    {
+        // 1) Burst-identifier groups — iOS bursts always cluster together.
+        var burstGroups: [String: [PhotoItem]] = [:]
+        var nonBurstItems: [PhotoItem] = []
         for item in items {
+            if let burst = item.burstIdentifier, !burst.isEmpty {
+                burstGroups[burst, default: []].append(item)
+            } else {
+                nonBurstItems.append(item)
+            }
+        }
+
+        var burstResult: [[PhotoItem]] = []
+        for (_, burst) in burstGroups {
+            if burst.count >= 2 {
+                // Sort by creation date so burst-quality logic sees a consistent order.
+                burstResult.append(burst.sorted {
+                    ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast)
+                })
+            } else {
+                // Single-item burst: fall through to the time-window pass so the
+                // photo isn't silently dropped from deduplication entirely.
+                nonBurstItems.append(contentsOf: burst)
+            }
+        }
+        // Re-sort after appending single-burst items so the time-window algorithm
+        // sees a monotonically-ordered sequence.
+        nonBurstItems.sort { ($0.creationDate ?? .distantPast) < ($1.creationDate ?? .distantPast) }
+
+        // 2) Time-window grouping on remaining items.
+        var timeResult: [[PhotoItem]] = []
+        var current: [PhotoItem] = []
+        for item in nonBurstItems {
             guard let date = item.creationDate else { continue }
             if let lastDate = current.last?.creationDate,
                date.timeIntervalSince(lastDate) > windowSeconds {
-                if current.count >= 2 { groups.append(current) }
+                if current.count >= 2 { timeResult.append(current) }
                 current = [item]
             } else {
                 current.append(item)
             }
         }
-        if current.count >= 2 { groups.append(current) }
-        return groups
+        if current.count >= 2 { timeResult.append(current) }
+        return (burst: burstResult, time: timeResult)
     }
 
     // MARK: - Visual similarity verification via difference hash
@@ -31,7 +69,7 @@ class SimilarityGrouper {
         progress: @escaping (Double) -> Void
     ) async -> [[PhotoItem]] {
         var result: [[PhotoItem]] = []
-        let total = Double(groups.count)
+        let total = Double(max(groups.count, 1))
 
         for (i, group) in groups.enumerated() {
             if Task.isCancelled { return result }
@@ -41,13 +79,7 @@ class SimilarityGrouper {
             var hashes: [UInt64?] = []
             for item in group {
                 if Task.isCancelled { return result }
-                if let thumb = await PhotoLibraryManager.loadThumbnail(
-                    for: item, size: CGSize(width: 9, height: 8)
-                ), let hash = differenceHash(thumb) {
-                    hashes.append(hash)
-                } else {
-                    hashes.append(nil)
-                }
+                hashes.append(await computeHash(for: item))
             }
 
             let n = group.count
@@ -94,7 +126,82 @@ class SimilarityGrouper {
         return result
     }
 
-    // MARK: - Difference hash (dHash)
+    // MARK: - Cross-format pass (HEIC ↔ JPG matching across the whole library)
+
+    /// Walks every item that wasn't already pulled into a group and looks for
+    /// visual duplicates that the time-window pass missed — typically the same
+    /// photo saved twice in different formats (HEIC + JPG), or duplicates that
+    /// landed far apart on the timeline because of sync issues.
+    ///
+    /// `existingGroupIDs` should contain the `id`s of every PhotoItem already
+    /// belonging to a verified group; those are skipped.
+    func findCrossFormatDuplicates(
+        among items: [PhotoItem],
+        excluding existingGroupIDs: Set<String>,
+        threshold: Int = 10,
+        progress: @escaping (Double) -> Void
+    ) async -> [[PhotoItem]] {
+        let candidates = items.filter { !existingGroupIDs.contains($0.id) && !$0.isVideo }
+        guard candidates.count >= 2 else { return [] }
+
+        // Compute hashes for every candidate. The progress callback covers this
+        // phase only — the matching pass that follows is O(n²) in memory but fast.
+        var hashes: [(item: PhotoItem, hash: UInt64)] = []
+        hashes.reserveCapacity(candidates.count)
+        let total = Double(candidates.count)
+        for (i, item) in candidates.enumerated() {
+            if Task.isCancelled { return [] }
+            progress(Double(i) / total)
+            if let h = await computeHash(for: item) {
+                hashes.append((item, h))
+            }
+        }
+        progress(1.0)
+
+        // Pairwise comparison — n² but each comparison is one XOR + popcount.
+        // For 5k candidates this is 12.5M ops, runs in well under a second.
+        let n = hashes.count
+        var parent = Array(0..<n)
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x {
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            }
+            return x
+        }
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        for a in 0..<n {
+            if Task.isCancelled { return [] }
+            for b in (a + 1)..<n {
+                if hammingDistance(hashes[a].hash, hashes[b].hash) < threshold {
+                    union(a, b)
+                }
+            }
+        }
+
+        var buckets: [Int: [PhotoItem]] = [:]
+        for i in 0..<n {
+            buckets[find(i), default: []].append(hashes[i].item)
+        }
+        return buckets.values.filter { $0.count >= 2 }
+    }
+
+    // MARK: - Hashing primitives
+
+    /// Computes a 64-bit difference hash for the given item via its thumbnail.
+    /// Returned hashes can be compared across formats: the resampling step
+    /// neutralises HEIC vs JPG vs PNG encoding differences.
+    func computeHash(for item: PhotoItem) async -> UInt64? {
+        guard let thumb = await PhotoLibraryManager.loadThumbnail(
+            for: item, size: CGSize(width: 9, height: 8)
+        ) else { return nil }
+        return differenceHash(thumb)
+    }
 
     func differenceHash(_ image: CGImage) -> UInt64? {
         guard let colorSpace = CGColorSpace(name: CGColorSpace.linearGray),

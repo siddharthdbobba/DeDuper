@@ -1,6 +1,5 @@
 import SwiftUI
 import Photos
-import AppKit
 import ImageIO
 
 struct PhotoLightboxView: View {
@@ -46,7 +45,11 @@ struct PhotoLightboxView: View {
                 .zIndex(1)
             }
         }
+#if os(macOS)
         .frame(minWidth: 960, maxWidth: .infinity, minHeight: 720, maxHeight: .infinity)
+#else
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+#endif
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
@@ -241,7 +244,7 @@ struct PhotoLightboxView: View {
 
 @MainActor
 final class LightboxImageCache: ObservableObject {
-    private let cache = NSCache<NSString, NSImage>()
+    private let cache = NSCache<NSString, PlatformImage>()
     private var inFlight: Set<String> = []
 
     init() {
@@ -250,12 +253,12 @@ final class LightboxImageCache: ObservableObject {
         cache.countLimit = 8
     }
 
-    func cached(for item: PhotoItem) -> NSImage? {
+    func cached(for item: PhotoItem) -> PlatformImage? {
         cache.object(forKey: item.id as NSString)
     }
 
     /// Returns the cached image or loads it now. Cached results are returned synchronously.
-    func load(item: PhotoItem) async -> NSImage? {
+    func load(item: PhotoItem) async -> PlatformImage? {
         if let img = cached(for: item) { return img }
         let img = await loadFromSource(item)
         if let img { cache.setObject(img, forKey: item.id as NSString) }
@@ -276,14 +279,14 @@ final class LightboxImageCache: ObservableObject {
         }
     }
 
-    private func loadFromSource(_ item: PhotoItem) async -> NSImage? {
+    private func loadFromSource(_ item: PhotoItem) async -> PlatformImage? {
         switch item.source {
         case .asset(let asset): return await loadAsset(asset)
         case .fileURL(let url): return await loadFile(url)
         }
     }
 
-    private func loadAsset(_ asset: PHAsset) async -> NSImage? {
+    private func loadAsset(_ asset: PHAsset) async -> PlatformImage? {
         await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
             options.deliveryMode = .highQualityFormat
@@ -304,11 +307,11 @@ final class LightboxImageCache: ObservableObject {
         }
     }
 
-    private func loadFile(_ url: URL) async -> NSImage? {
+    private func loadFile(_ url: URL) async -> PlatformImage? {
         await Task.detached(priority: .userInitiated) {
             _ = url.startAccessingSecurityScopedResource()
             defer { url.stopAccessingSecurityScopedResource() }
-            return NSImage(contentsOf: url)
+            return PlatformImage(contentsOfFile: url.path)
         }.value
     }
 }
@@ -651,7 +654,7 @@ actor PhotoMetadataLoader {
 struct FullSizePhotoView: View {
     let item: PhotoItem
     @ObservedObject var cache: LightboxImageCache
-    @State private var image: NSImage?
+    @State private var image: PlatformImage?
 
     init(item: PhotoItem, cache: LightboxImageCache) {
         self.item = item
@@ -664,7 +667,7 @@ struct FullSizePhotoView: View {
     var body: some View {
         ZStack {
             if let image {
-                Image(nsImage: image)
+                Image(platformImage: image)
                     .resizable()
                     .scaledToFit()
                     // Absorb taps that land on the image itself; the surrounding

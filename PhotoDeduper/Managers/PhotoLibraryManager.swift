@@ -1,8 +1,16 @@
 import Photos
 import CoreGraphics
 import ImageIO
+import AVFoundation
 
 class PhotoLibraryManager {
+
+    /// What media types a scan should include.
+    enum MediaFilter {
+        case stillsOnly
+        case stillsAndVideos
+        case videosOnly
+    }
 
     // MARK: - Photos library
 
@@ -11,14 +19,14 @@ class PhotoLibraryManager {
         return status == .authorized || status == .limited
     }
 
-    /// Enumerates every image in the user's Photos library. Runs on a background
-    /// task so the main actor stays responsive (Cancel button must remain clickable)
-    /// and bails out promptly on cancellation.
-    func fetchAllPhotos() async -> [PhotoItem] {
+    /// Enumerates every image (and optionally video) in the user's Photos library.
+    /// Runs on a background task so the main actor stays responsive and bails out
+    /// promptly on cancellation.
+    func fetchAllPhotos(filter: MediaFilter = .stillsOnly) async -> [PhotoItem] {
         let task = Task.detached(priority: .userInitiated) { () -> [PhotoItem] in
             let options = PHFetchOptions()
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-            options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+            options.predicate = Self.predicate(for: filter)
 
             let result = PHAsset.fetchAssets(with: options)
             var items: [PhotoItem] = []
@@ -61,6 +69,7 @@ class PhotoLibraryManager {
             .smartAlbumDepthEffect,
             .smartAlbumLivePhotos,
             .smartAlbumLongExposures,
+            .smartAlbumBursts,
         ]
         for subtype in usefulSubtypes {
             let result = PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil)
@@ -88,11 +97,11 @@ class PhotoLibraryManager {
         return albums
     }
 
-    func fetchPhotos(from collection: PHAssetCollection) async -> [PhotoItem] {
+    func fetchPhotos(from collection: PHAssetCollection, filter: MediaFilter = .stillsOnly) async -> [PhotoItem] {
         let task = Task.detached(priority: .userInitiated) { () -> [PhotoItem] in
             let options = PHFetchOptions()
             options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
-            options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+            options.predicate = Self.predicate(for: filter)
 
             let result = PHAsset.fetchAssets(in: collection, options: options)
             var items: [PhotoItem] = []
@@ -113,11 +122,24 @@ class PhotoLibraryManager {
         }
     }
 
+    /// Returns the local identifiers of every asset that belongs to any of the
+    /// given collections. Used to expand "protected albums" into a fast lookup
+    /// set the pipeline can consult per-item.
+    func assetIDs(in collections: [PHAssetCollection]) -> Set<String> {
+        var ids: Set<String> = []
+        let options = PHFetchOptions()
+        for col in collections {
+            let result = PHAsset.fetchAssets(in: col, options: options)
+            result.enumerateObjects { asset, _, _ in ids.insert(asset.localIdentifier) }
+        }
+        return ids
+    }
+
     // MARK: - Folder scanning
 
-    /// Recursively enumerates image files in the given folder. Off-main + cooperatively
-    /// cancellable for the same reasons as `fetchAllPhotos`.
-    func scanFolder(_ url: URL) async -> [PhotoItem] {
+    /// Recursively enumerates image (and optionally video) files in the given folder.
+    /// Off-main + cooperatively cancellable for the same reasons as `fetchAllPhotos`.
+    func scanFolder(_ url: URL, filter: MediaFilter = .stillsOnly) async -> [PhotoItem] {
         let task = Task.detached(priority: .userInitiated) { () -> [PhotoItem] in
             guard url.startAccessingSecurityScopedResource() else { return [] }
             defer { url.stopAccessingSecurityScopedResource() }
@@ -126,14 +148,22 @@ class PhotoLibraryManager {
             let fm = FileManager.default
             guard let enumerator = fm.enumerator(
                 at: url,
-                includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey],
+                includingPropertiesForKeys: [.creationDateKey, .isRegularFileKey, .fileSizeKey],
                 options: [.skipsHiddenFiles]
             ) else { return [] }
 
-            for case let fileURL as URL in enumerator {
+            let allowed: Set<String> = {
+                switch filter {
+                case .stillsOnly:       return PhotoItem.imageExtensions
+                case .videosOnly:       return PhotoItem.videoExtensions
+                case .stillsAndVideos:  return PhotoItem.supportedExtensions
+                }
+            }()
+
+            while let fileURL = enumerator.nextObject() as? URL {
                 if Task.isCancelled { return items }
                 let ext = fileURL.pathExtension.lowercased()
-                guard PhotoItem.imageExtensions.contains(ext) else { continue }
+                guard allowed.contains(ext) else { continue }
                 let isFile = (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile ?? false
                 guard isFile else { continue }
                 items.append(.from(url: fileURL))
@@ -156,6 +186,9 @@ class PhotoLibraryManager {
         case .asset(let asset):
             return await loadAssetThumbnail(asset, size: size)
         case .fileURL(let url):
+            if item.isVideo {
+                return await loadVideoThumbnail(url, size: size)
+            }
             return loadFileThumbnail(url, size: size)
         }
     }
@@ -177,7 +210,7 @@ class PhotoLibraryManager {
             ) { image, _ in
                 guard !resumed else { return }
                 resumed = true
-                continuation.resume(returning: image?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+                continuation.resume(returning: image?.asCGImage)
             }
         }
     }
@@ -194,5 +227,38 @@ class PhotoLibraryManager {
             kCGImageSourceCreateThumbnailWithTransform: true
         ]
         return CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary)
+    }
+
+    /// Generates a still thumbnail from a video file (single keyframe near the start).
+    private static func loadVideoThumbnail(_ url: URL, size: CGSize) async -> CGImage? {
+        await Task.detached(priority: .userInitiated) {
+            _ = url.startAccessingSecurityScopedResource()
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            let asset = AVURLAsset(url: url)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = size
+
+            // Half-second in; some files have a black first frame.
+            let time = CMTime(seconds: 0.5, preferredTimescale: 600)
+            return try? generator.copyCGImage(at: time, actualTime: nil)
+        }.value
+    }
+
+    // MARK: - Private helpers
+
+    private static func predicate(for filter: MediaFilter) -> NSPredicate {
+        switch filter {
+        case .stillsOnly:
+            return NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        case .videosOnly:
+            return NSPredicate(format: "mediaType == %d", PHAssetMediaType.video.rawValue)
+        case .stillsAndVideos:
+            return NSPredicate(
+                format: "mediaType == %d OR mediaType == %d",
+                PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue
+            )
+        }
     }
 }

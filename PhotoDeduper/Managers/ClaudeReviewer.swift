@@ -70,6 +70,12 @@ struct ClaudeReviewer {
         req.httpBody = bodyData
 
         let (data, response) = try await URLSession.shared.data(for: req)
+        // Defensive cap — Claude responses are <2 KB in practice. Refusing
+        // anything beyond 1 MB prevents a misbehaving / hijacked endpoint
+        // from forcing us to parse arbitrary-sized JSON.
+        guard data.count <= 1_048_576 else {
+            throw ReviewerError.parseFailed
+        }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw ReviewerError.httpError(http.statusCode, GroqReviewer.extractAPIError(from: data))
         }
