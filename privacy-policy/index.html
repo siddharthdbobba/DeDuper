@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeDuper Privacy Policy</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.7;
+      color: #1a1a1a;
+      background: #fff;
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+    }
+    h1 { font-size: 2rem; font-weight: 700; margin-bottom: 6px; }
+    .meta { color: #666; font-size: 0.9rem; margin-bottom: 48px; }
+    h2 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-top: 40px;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    p { margin-bottom: 14px; }
+    ul { margin: 10px 0 14px 22px; }
+    li { margin-bottom: 6px; }
+    strong { font-weight: 600; }
+    .summary-box {
+      background: #f0f7ff;
+      border: 1px solid #bdd7f5;
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin: 32px 0 40px;
+    }
+    .summary-box p { margin-bottom: 6px; }
+    .summary-box p:last-child { margin-bottom: 0; }
+    a { color: #0070f3; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    footer { margin-top: 60px; color: #999; font-size: 0.85rem; border-top: 1px solid #e5e5e5; padding-top: 24px; }
+  </style>
+</head>
+<body>
+
+<h1>DeDuper — Privacy Policy</h1>
+<p class="meta">Effective date: May 26, 2026 &nbsp;·&nbsp; App version: 1.0 and later</p>
+
+<div class="summary-box">
+  <p><strong>Short version:</strong> DeDuper does not collect, sell, or share your personal data. Your photos never leave your device unless you choose to use the optional bundled AI review feature, in which case only the photos in the specific group you select are sent — and only to process your request. No account is required. No analytics or tracking of any kind.</p>
+</div>
+
+<h2>1. Who We Are</h2>
+<p>DeDuper is developed and published by Siddharth Bobba (<a href="mailto:siddharthdbobba@gmail.com">siddharthdbobba@gmail.com</a>). "We", "our", and "us" refer to this individual developer. "You" means anyone who installs or uses DeDuper on macOS or iOS.</p>
+
+<h2>2. What DeDuper Does</h2>
+<p>DeDuper is a duplicate photo cleaner. It scans your Photos library (or a folder you select), groups visually similar or time-adjacent photos, scores them automatically, and lets you delete the lower-quality copies. All scanning, grouping, and scoring happens entirely on your device using Apple system frameworks.</p>
+
+<h2>3. Data We Do Not Collect</h2>
+<p>We do not collect, store, transmit, or process any of the following:</p>
+<ul>
+  <li>Your photos, videos, or any media files</li>
+  <li>Your name, email address, or any contact information</li>
+  <li>Your Apple ID or any account credentials</li>
+  <li>Your location</li>
+  <li>Device identifiers or advertising IDs</li>
+  <li>Crash reports or usage analytics</li>
+  <li>Any behavioral or diagnostic telemetry</li>
+</ul>
+<p>DeDuper contains <strong>no analytics SDKs, no crash-reporting services, and no third-party tracking libraries</strong> of any kind.</p>
+
+<h2>4. Photo Library Access</h2>
+<p>DeDuper requests access to your Photos library solely to scan for duplicate and similar photos. This access is handled entirely by Apple's <strong>Photos framework</strong> on your device. The app reads photo metadata (timestamps, dimensions, file size) and generates small perceptual hashes locally to compare images. No photo data is ever uploaded, transmitted, or stored outside your device as part of the scanning process.</p>
+<p>On macOS, you may also grant DeDuper access to a specific folder on your file system. Files in that folder are read locally and never transmitted.</p>
+<p>You can revoke photo library access at any time in <strong>System Settings → Privacy & Security → Photos</strong> (macOS) or <strong>Settings → Privacy & Security → Photos</strong> (iOS).</p>
+
+<h2>5. Bundled AI Review Feature (Premium)</h2>
+<p>DeDuper Premium includes an optional AI review feature powered by a bundled assistant. When you tap <strong>"Ask AI"</strong> on a group of photos:</p>
+<ul>
+  <li>Only the photos in that specific group are sent for review — no other photos from your library are ever accessed or transmitted.</li>
+  <li>Photos are sent to <strong>OpenAI's API</strong> via a secure proxy server operated by the developer. The proxy enforces model selection, rate limits, and request authentication. It does not log or store photo content.</li>
+  <li>OpenAI processes the images to return a recommendation and is bound by its own <a href="https://openai.com/policies/privacy-policy" target="_blank">Privacy Policy</a>. OpenAI's API data usage policies state that API inputs are not used to train models by default.</li>
+  <li>The AI recommendation (text only) is displayed in the app and stored <strong>only in memory</strong>. It is discarded when you close the group or restart the app.</li>
+</ul>
+<p><strong>You are always in control.</strong> The AI feature is strictly opt-in: photos are only sent when you explicitly tap "Ask AI" or enable the auto-review toggle in Settings. You can disable auto-review at any time in Settings → Bundled AI → Auto-review close calls.</p>
+<p><strong>No third-party API plugins or bring-your-own-key integrations are available.</strong> The app does not support entering or storing external API credentials of any kind.</p>
+
+<h2>6. In-App Purchase</h2>
+<p>DeDuper Premium is sold as a one-time non-consumable in-app purchase. All payment processing is handled exclusively by <strong>Apple</strong> via StoreKit. The developer never receives your payment card details, billing address, or any financial information. Apple's <a href="https://www.apple.com/legal/privacy/" target="_blank">Privacy Policy</a> governs how Apple handles your purchase data.</p>
+<p>Purchase entitlement is verified on-device using StoreKit 2. No server-side account or login is required.</p>
+
+<h2>7. Local Storage</h2>
+<p>DeDuper stores the following data <strong>only on your device</strong>:</p>
+<ul>
+  <li><strong>App preferences</strong> (scan sensitivity, time window, protected albums, etc.) — stored in <code>UserDefaults</code>, on-device only, never synced to iCloud.</li>
+  <li><strong>Audit log</strong> — a local CSV record of photos you have deleted using DeDuper. Stored in the app's sandboxed container. Never transmitted. You can export or review this log at any time from Settings → Audit Log, and it is removed when you uninstall the app.</li>
+</ul>
+<p>No data is stored in iCloud, synced across devices, or accessible to the developer.</p>
+
+<h2>8. No Advertising or Third-Party SDKs</h2>
+<p>DeDuper contains no advertising, no advertising identifiers, and no third-party SDKs of any kind. The only external network contact the app makes is the optional AI review request described in Section 5, which occurs only at your explicit direction.</p>
+
+<h2>9. Children's Privacy</h2>
+<p>DeDuper is rated 4+ and is suitable for all ages. Because we do not collect any personal data from any user, no special provisions for users under 13 (COPPA) or under 16 (GDPR) are required beyond the general protections described in this policy.</p>
+
+<h2>10. Data Retention and Deletion</h2>
+<p>We do not retain any data about you because we do not collect any. All app data (preferences, audit log) is stored locally on your device and is deleted automatically when you uninstall DeDuper.</p>
+
+<h2>11. Your Rights</h2>
+<p>Because we collect no personal data, there is nothing for us to provide, correct, or delete on our end. If you have questions about data processed by Apple (purchases, Photos framework) or OpenAI (AI review requests), please consult their respective privacy policies. If you have any concerns about DeDuper specifically, please contact us at the address below.</p>
+
+<h2>12. Security</h2>
+<p>All communication between the app and the AI proxy is conducted over <strong>HTTPS/TLS</strong>. Each request is authenticated using an HMAC signature embedded in the app. The app operates within Apple's strict sandboxing model, which limits its access to only the resources you explicitly grant.</p>
+
+<h2>13. Changes to This Policy</h2>
+<p>If we make material changes to this policy, we will update the effective date at the top of this page and, where possible, notify users through an app update. Continued use of DeDuper after changes are posted constitutes acceptance of the revised policy. We encourage you to review this page periodically.</p>
+
+<h2>14. Contact</h2>
+<p>If you have any questions, concerns, or requests regarding this privacy policy or DeDuper's data practices, please contact:</p>
+<p><strong>Siddharth Bobba</strong><br>
+<a href="mailto:siddharthdbobba@gmail.com">siddharthdbobba@gmail.com</a></p>
+
+<footer>
+  <p>DeDuper — Duplicate Photo Cleaner &nbsp;·&nbsp; Privacy Policy &nbsp;·&nbsp; Effective May 26, 2026</p>
+</footer>
+
+</body>
+</html>

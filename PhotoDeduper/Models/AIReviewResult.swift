@@ -4,6 +4,9 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
     case claude = "claude"
     case openai = "openai"
     case groq   = "groq"
+    /// Bundled GPT-4.1 mini via the developer-hosted Cloudflare proxy.
+    /// No user API key required.
+    case proxy  = "proxy"
 
     var id: String { rawValue }
 
@@ -12,6 +15,7 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
         case .claude: "Claude"
         case .openai: "ChatGPT"
         case .groq:   "Groq"
+        case .proxy:  "GPT-4.1 mini"
         }
     }
 
@@ -20,6 +24,7 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
         case .claude: "sparkles"
         case .openai: "bubble.left.and.bubble.right.fill"
         case .groq:   "bolt.fill"
+        case .proxy:  "wand.and.stars"
         }
     }
 
@@ -28,8 +33,12 @@ enum AIProvider: String, CaseIterable, Identifiable, Hashable {
         case .claude: .purple
         case .openai: .mint
         case .groq:   .orange
+        case .proxy:  .blue
         }
     }
+
+    /// True for providers that require the user to supply their own API key.
+    var requiresUserKey: Bool { self != .proxy }
 }
 
 struct AIReviewResult {

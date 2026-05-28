@@ -1,4 +1,4 @@
-# Photo Deduper
+# DeDuper
 
 A native macOS app for travel photographers to find and remove near-duplicate photos using on-device AI scoring and Claude's vision API.
 

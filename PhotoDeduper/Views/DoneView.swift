@@ -6,6 +6,10 @@ struct DoneView: View {
     let freedBytes: Int64
     @ObservedObject var viewModel: ReviewViewModel
 
+    private var isHoldForReview: Bool {
+        UserDefaults.standard.bool(forKey: "holdForReview")
+    }
+
     var body: some View {
         VStack(spacing: 28) {
             Spacer()
@@ -15,25 +19,41 @@ struct DoneView: View {
                 .foregroundStyle(.green)
 
             VStack(spacing: 6) {
-                Text("All done!")
+                Text(isHoldForReview ? "Staged for review!" : "All done!")
                     .font(.largeTitle.bold())
-                Text("Your library is cleaner now.")
+                Text(isHoldForReview ? "Photos are in your Photos library under \"\(BatchDeleteManager.reviewAlbumName)\"." : "Your library is cleaner now.")
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
             statsCard
 
-            Text("Deleted photos are in **Recently Deleted** and can be recovered for 30 days.")
+            Text(isHoldForReview
+                 ? "Open Photos to audit the staged album; remove from there when you're ready."
+                 : "Deleted photos are in **Recently Deleted** and can be recovered for 30 days.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
 
-            Button { viewModel.reset() } label: {
-                Label("Home", systemImage: "house")
+            HStack(spacing: 12) {
+                Button { viewModel.reset() } label: {
+                    Label("Home", systemImage: "house")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                if viewModel.lastReceipt != nil {
+                    Button {
+                        Task { await viewModel.attemptUndo() }
+                    } label: {
+                        Label("Open Photos", systemImage: "arrow.uturn.backward")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .help("Opens Photos so you can confirm and recover from Recently Deleted")
+                }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
 
             Spacer()
         }
@@ -43,13 +63,15 @@ struct DoneView: View {
 
     private var statsCard: some View {
         VStack(spacing: 0) {
-            statRow(icon: "trash.fill", label: "Photos deleted", value: "\(deletedCount)", color: .red)
+            statRow(icon: isHoldForReview ? "tray.full" : "trash.fill",
+                    label: isHoldForReview ? "Photos staged" : "Photos deleted",
+                    value: "\(deletedCount)", color: .red)
             Divider().padding(.leading, 44)
             statRow(icon: "photo.stack.fill", label: "Photos kept", value: "\(keptCount)", color: .blue)
             Divider().padding(.leading, 44)
             statRow(
                 icon: "externaldrive.fill",
-                label: "Space freed",
+                label: isHoldForReview ? "Estimated space to free" : "Space freed",
                 value: ByteCountFormatter.string(fromByteCount: freedBytes, countStyle: .file),
                 color: .green
             )

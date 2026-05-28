@@ -1,27 +1,117 @@
 import Foundation
 import CoreImage
+import Vision
+
+/// Quality score per photo. Now a richer struct than a bare Double so the UI
+/// can show *why* a photo won — sharpness vs eye-state vs exposure.
+struct PhotoQuality {
+    let total: Double          // [0, 1]
+    let sharpness: Double      // [0, 1]
+    let exposure: Double       // [0, 1]
+    let faceScore: Double?     // nil if no faces detected (or video)
+    let faceCount: Int
+    let eyesOpen: Double       // [0, 1] when faceCount > 0; 0 otherwise
+    let aesthetics: Double?    // [0, 1] whole-image aesthetic score (Vision, macOS 15+/iOS 18+); nil when unavailable
+}
 
 class PhotoScorer {
 
-    func scoreGroup(_ items: [PhotoItem]) async -> [Double] {
-        var scores = [Double](repeating: 0, count: items.count)
-        for (i, item) in items.enumerated() {
-            if Task.isCancelled { return scores }
-            scores[i] = await scoreItem(item)
+    /// Returns one `PhotoQuality` per item. Async so callers can also use the
+    /// shortcut `scoreGroup` that returns just `[Double]` totals.
+    func evaluateGroup(_ items: [PhotoItem]) async -> [PhotoQuality] {
+        var results: [PhotoQuality] = []
+        results.reserveCapacity(items.count)
+        for item in items {
+            if Task.isCancelled {
+                results.append(PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil))
+                continue
+            }
+            results.append(await evaluate(item))
         }
-        return scores
+        return results
     }
 
-    func scoreItem(_ item: PhotoItem) async -> Double {
+    /// Backwards-compatible shortcut used by older call sites — returns just totals.
+    func scoreGroup(_ items: [PhotoItem]) async -> [Double] {
+        let qualities = await evaluateGroup(items)
+        return qualities.map(\.total)
+    }
+
+    func evaluate(_ item: PhotoItem) async -> PhotoQuality {
+        // Videos: skip Core Image scoring entirely. Use file size and resolution
+        // (when known) as a crude quality proxy — bigger ≈ higher bitrate ≈ better.
+        if item.isVideo {
+            let pixels = Double(max(1, item.pixelWidth * item.pixelHeight))
+            let bytes  = Double(item.fileByteSize ?? 0)
+            // Megapixels normalised against 4K (~8 MP). File size in MB normalised against 200 MB.
+            let resScore  = min(1.0, pixels / 8_000_000.0)
+            let sizeScore = min(1.0, bytes / 200_000_000.0)
+            let combined = max(resScore, sizeScore)
+            return PhotoQuality(
+                total: combined,
+                sharpness: resScore,
+                exposure: 0.5,
+                faceScore: nil,
+                faceCount: 0,
+                eyesOpen: 0,
+                aesthetics: nil
+            )
+        }
+
         guard let cgImage = await PhotoLibraryManager.loadThumbnail(
             for: item, size: CGSize(width: 800, height: 800)
-        ) else { return 0.0 }  // can't evaluate → never chosen as keeper
+        ) else {
+            return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil)
+        }
 
         let ctx = CIContext(options: [.useSoftwareRenderer: false])
         let ci = CIImage(cgImage: cgImage)
         let sharpness = computeSharpness(ci, context: ctx)
         let exposure  = computeExposure(ci, context: ctx)
-        return 0.65 * sharpness + 0.35 * exposure
+
+        // Face analysis runs in parallel via Vision; it's cheap (~10-30 ms per photo at 800px).
+        let face = await FaceAnalyzer.analyze(cgImage)
+
+        // Whole-image aesthetic quality (Vision, macOS 15+/iOS 18+). nil on the
+        // iOS 17 build / macOS 14, where we fall back to the technical-only
+        // weighting below.
+        let aesthetics = await AestheticsScorer.score(ci)
+
+        // Weighting — goal is the best OVERALL photo, not the most-open eyes.
+        //   - When the aesthetics model is available it leads the decision; eye
+        //     openness is only a minor input folded into face.score (see FaceAnalyzer).
+        //   - Without it, fall back to face/sharpness/exposure.
+        let total: Double
+        if face.faceCount > 0 {
+            if let a = aesthetics {
+                // Split into terms — a single 4-way literal sum makes Swift's
+                // overload resolution pathologically slow ("unable to type-check
+                // in reasonable time").
+                let wAesthetic = 0.30 * a
+                let wFace      = 0.30 * face.score
+                let wSharp     = 0.25 * sharpness
+                let wExposure  = 0.15 * exposure
+                total = wAesthetic + wFace + wSharp + wExposure
+            } else {
+                total = 0.45 * face.score + 0.35 * sharpness + 0.20 * exposure
+            }
+        } else {
+            if let a = aesthetics {
+                total = 0.40 * a + 0.45 * sharpness + 0.15 * exposure
+            } else {
+                total = 0.65 * sharpness + 0.35 * exposure
+            }
+        }
+
+        return PhotoQuality(
+            total: total,
+            sharpness: sharpness,
+            exposure: exposure,
+            faceScore: face.faceCount > 0 ? face.score : nil,
+            faceCount: face.faceCount,
+            eyesOpen: face.meanEyeOpenness,
+            aesthetics: aesthetics
+        )
     }
 
     // MARK: - Sharpness via edge mean, peak, and standard deviation
@@ -95,5 +185,25 @@ class PhotoScorer {
         let overPenalty  = min(1.0, overexposed * overexposed * 20.0 + overexposed * 2.0)
         let underPenalty = min(1.0, underexposed * 1.5)
         return max(0, 1.0 - underPenalty - overPenalty)
+    }
+}
+
+/// Whole-image aesthetic quality via Apple's Vision model.
+///
+/// Available on macOS 15 / iOS 18+. Returns a score normalised to `[0, 1]`
+/// (Vision reports `[-1, 1]`), or `nil` when the API is unavailable — e.g. the
+/// iOS 17 build or macOS 14 — so callers fall back to technical metrics. The
+/// `#available` guard weak-links the symbol, so this compiles and runs at the
+/// current deployment target regardless of whether it's bumped to 15.
+enum AestheticsScorer {
+    static func score(_ image: CIImage) async -> Double? {
+        guard #available(macOS 15.0, iOS 18.0, *) else { return nil }
+        let request = CalculateImageAestheticsScoresRequest()
+        do {
+            let observation = try await request.perform(on: image)
+            return (Double(observation.overallScore) + 1.0) / 2.0
+        } catch {
+            return nil
+        }
     }
 }

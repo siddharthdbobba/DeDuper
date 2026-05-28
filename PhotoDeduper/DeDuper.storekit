@@ -1,0 +1,57 @@
+{
+  "identifier" : "DeDuper",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "4.99",
+      "familyShareable" : false,
+      "internalID" : "E1E0B76C-F39B-4FC6-92EC-9DE5F44AC127",
+      "localizations" : [
+        {
+          "description" : "Unlock AI-powered photo review. Bundled assistant included — no API key required.",
+          "displayName" : "DeDuper Premium",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.photodeduper.app.premium",
+      "referenceName" : "DeDuper Premium",
+      "type" : "NonConsumable"
+    }
+  ],
+  "settings" : {
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Load Products"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Purchase"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "Verify Receipts"
+      },
+      {
+        "current" : null,
+        "enabled" : false,
+        "name" : "App Store Sync"
+      }
+    ]
+  },
+  "subscriptionGroups" : [
+
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

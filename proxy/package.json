@@ -1,0 +1,14 @@
+{
+  "name": "photodeduper-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev":    "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test":   "node test.js",
+    "setup":  "bash setup.sh"
+  },
+  "devDependencies": {
+    "wrangler": "^4.94.0"
+  }
+}

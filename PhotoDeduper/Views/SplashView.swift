@@ -1,19 +1,26 @@
 import SwiftUI
+import PhotosUI
+import Photos
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 struct SplashView: View {
     @ObservedObject var viewModel: ReviewViewModel
     @State private var showSettings = false
+#if os(macOS)
     @State private var showFolderPicker = false
+#endif
     @State private var showAlbumPicker = false
 
-    // API key inline entry
-    @State private var claudeKeyDraft: String = ""
-    @State private var openAIKeyDraft: String = ""
-    @State private var hasClaudeKey = false
-    @State private var hasOpenAIKey = false
-    @State private var hasGroqKey = false
-    @State private var isPaidUser = false
+    @AppStorage("hasShownAIDisclosure") private var hasShownAIDisclosure = false
+    @State private var showAIDisclosure = false
+    @State private var showPhotoPicker = false
+    @State private var photoAccessDenied = false
+    @State private var photoAuthStatus: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
 
     var body: some View {
         ScrollView {
@@ -25,7 +32,7 @@ struct SplashView: View {
                     .foregroundStyle(.blue)
 
                 VStack(spacing: 8) {
-                    Text("Photo Deduper")
+                    Text("DeDuper")
                         .font(.largeTitle.bold())
                     Text("Find and remove duplicate shots from your photo library.")
                         .foregroundStyle(.secondary)
@@ -33,8 +40,24 @@ struct SplashView: View {
                         .frame(maxWidth: 380)
                 }
 
-                if isPaidUser {
-                    apiKeySection
+                // Limited Photos Access banner
+                if photoAuthStatus == .limited {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Limited Photos Access")
+                                .font(.subheadline.bold())
+                            Text("Only your selected photos will be scanned.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                    .background(.orange.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .frame(maxWidth: 400)
                 }
 
                 VStack(spacing: 12) {
@@ -42,7 +65,7 @@ struct SplashView: View {
                         viewModel.startScan()
                     } label: {
                         Label("Scan Photos Library", systemImage: "photo.on.rectangle")
-                            .frame(width: 240)
+                            .frame(maxWidth: 240)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
@@ -52,21 +75,45 @@ struct SplashView: View {
                         showAlbumPicker = true
                     } label: {
                         Label("Choose Album…", systemImage: "rectangle.stack")
-                            .frame(width: 240)
+                            .frame(maxWidth: 240)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     .help("Pick a specific album from your Photos library")
 
                     Button {
+                        // Request authorization before presenting the library-backed
+                        // picker so PHPickerConfiguration(photoLibrary:) can resolve
+                        // asset identifiers correctly (works for both Limited and
+                        // All Photos access).
+                        Task {
+                            let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+                            photoAuthStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                            if status == .authorized || status == .limited {
+                                showPhotoPicker = true
+                            } else {
+                                photoAccessDenied = true
+                            }
+                        }
+                    } label: {
+                        Label("Select Photos…", systemImage: "photo.badge.checkmark")
+                            .frame(maxWidth: 240)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .help("Hand-pick individual photos to scan for duplicates")
+
+#if os(macOS)
+                    Button {
                         showFolderPicker = true
                     } label: {
                         Label("Choose Folder…", systemImage: "folder")
-                            .frame(width: 240)
+                            .frame(maxWidth: 240)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                     .help("Pick a specific folder of photos to scan")
+#endif
                 }
 
                 Spacer(minLength: 24)
@@ -83,9 +130,8 @@ struct SplashView: View {
                 .help("Settings")
             }
         }
-        .onAppear { refreshKeyStatus() }
-        .onChange(of: showSettings) { _, isShowing in
-            if !isShowing { refreshKeyStatus() }
+        .onAppear {
+            photoAuthStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         }
         .sheet(isPresented: $showSettings) {
             SettingsView()
@@ -95,6 +141,7 @@ struct SplashView: View {
                 viewModel.startAlbumScan(album: album)
             }
         }
+#if os(macOS)
         .fileImporter(
             isPresented: $showFolderPicker,
             allowedContentTypes: [.folder],
@@ -108,119 +155,46 @@ struct SplashView: View {
                 break
             }
         }
-    }
-
-    // MARK: - API Key Section
-
-    @ViewBuilder
-    private var apiKeySection: some View {
-        if !hasClaudeKey && !hasOpenAIKey && !hasGroqKey {
-            // Banner: no keys configured
-            VStack(alignment: .leading, spacing: 12) {
-                Label("No AI keys configured", systemImage: "key.slash")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.orange)
-
-                Text("Add an Anthropic or OpenAI key to enable automatic close-call comparison.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                VStack(spacing: 8) {
-                    keyField(label: "Claude", placeholder: "sk-ant-…", provider: .claude,
-                             draft: $claudeKeyDraft)
-                    keyField(label: "ChatGPT", placeholder: "sk-…", provider: .openai,
-                             draft: $openAIKeyDraft)
+#endif
+        // LibraryPhotoPicker uses NSWindow.beginSheet() — a true window-modal
+        // sheet — so clicks inside the picker's sidebar cannot reach SwiftUI
+        // buttons on the parent window.  (SwiftUI's .sheet() leaves the parent
+        // window interactive, which caused sidebar clicks to bleed through and
+        // open the album picker simultaneously.)
+        .background(
+            LibraryPhotoPicker(
+                isPresented: $showPhotoPicker,
+                filter: UserDefaults.standard.bool(forKey: "scanVideosToo")
+                    ? PHPickerFilter.any(of: [.images, .videos])
+                    : PHPickerFilter.images,
+                onFinish: { results in
+                    guard !results.isEmpty else { return }
+                    let identifiers = results.compactMap { $0.assetIdentifier }.filter { !$0.isEmpty }
+                    viewModel.startPickedPhotosScan(identifiers: identifiers)
                 }
-
-                HStack {
-                    Text("Stored securely · accessible only to this app")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    Button("Save") {
-                        if !claudeKeyDraft.isEmpty { commitKey(for: .claude) }
-                        if !openAIKeyDraft.isEmpty { commitKey(for: .openai) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(claudeKeyDraft.isEmpty && openAIKeyDraft.isEmpty)
+            )
+            .frame(width: 0, height: 0)
+        )
+        .alert("Photos Access Required", isPresented: $photoAccessDenied) {
+            Button("Open Settings") {
+#if os(macOS)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos") {
+                    NSWorkspace.shared.open(url)
                 }
+#else
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+#endif
             }
-            .padding(16)
-            .background(.orange.opacity(0.07))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.orange.opacity(0.2), lineWidth: 1))
-            .frame(maxWidth: 400)
-        } else {
-            // Status row: at least one key present
-            HStack(spacing: 16) {
-                keyStatusPill(provider: .claude, isActive: hasClaudeKey)
-                keyStatusPill(provider: .openai, isActive: hasOpenAIKey)
-                keyStatusPill(provider: .groq, isActive: hasGroqKey)
-                Spacer()
-                Button { showSettings = true } label: {
-                    Image(systemName: "pencil")
-                        .font(.caption)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Edit API keys in Settings")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.background.shadow(.drop(color: .black.opacity(0.05), radius: 4, y: 1)))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-            .frame(maxWidth: 400)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("DeDuper needs Photos library access to let you hand-pick photos. Open Settings → Privacy → Photos and choose \"All Photos\" or \"Limited Access\".")
         }
-    }
-
-    private func keyField(label: String, placeholder: String, provider: AIProvider,
-                          draft: Binding<String>) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: provider.systemImage)
-                .foregroundStyle(provider.accentColor)
-                .frame(width: 18)
-            Text(label)
-                .font(.subheadline)
-                .frame(width: 54, alignment: .leading)
-            SecureField(placeholder, text: draft)
-                .onSubmit { commitKey(for: provider) }
-                .textFieldStyle(.roundedBorder)
+        .alert("AI Photo Review", isPresented: $showAIDisclosure) {
+            Button("Got it") { hasShownAIDisclosure = true }
+        } message: {
+            Text("When scanning, photos in near-identical groups are automatically sent as 800×800 thumbnails to GPT-4.1 mini for comparison.\n\nYou can turn this off in Settings → \"Auto-review close calls\".")
         }
-    }
-
-    private func keyStatusPill(provider: AIProvider, isActive: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: provider.systemImage)
-                .foregroundStyle(isActive ? provider.accentColor : .secondary)
-                .font(.caption)
-            Text(provider.displayName)
-                .font(.caption.bold())
-            Text(isActive ? "Active" : "—")
-                .font(.caption)
-                .foregroundStyle(isActive ? .green : .secondary)
-        }
-    }
-
-    // MARK: - Keychain helpers
-
-    private func commitKey(for provider: AIProvider) {
-        let draft    = provider == .claude ? claudeKeyDraft : openAIKeyDraft
-        let kwKey    = provider == .claude ? "claude_api_key" : "openai_api_key"
-        if draft.isEmpty {
-            KeychainHelper.delete(key: kwKey)
-        } else {
-            KeychainHelper.save(key: kwKey, value: draft)
-        }
-        // Clear draft immediately — never keep plaintext in @State longer than needed
-        if provider == .claude { claudeKeyDraft = "" } else { openAIKeyDraft = "" }
-        refreshKeyStatus()
-    }
-
-    private func refreshKeyStatus() {
-        hasClaudeKey  = !(KeychainHelper.retrieve(key: "claude_api_key")  ?? "").isEmpty
-        hasOpenAIKey  = !(KeychainHelper.retrieve(key: "openai_api_key")  ?? "").isEmpty
-        hasGroqKey    = !(KeychainHelper.retrieve(key: "groq_api_key")    ?? "").isEmpty
-        isPaidUser    = UserDefaults.standard.bool(forKey: "isPaidUser")
     }
 }
