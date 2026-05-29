@@ -24,7 +24,8 @@ const MAX_BODY    = 8 * 1024 * 1024;   // 8 MB hard cap
 const TS_WINDOW   = 300;               // ±5 minutes clock skew tolerance
 const RATE_HOUR   = 200;               // max requests / IP / hour
 const RATE_DAY    = 1000;              // max requests / IP / day
-const MAX_ITEMS   = 6;                 // max content items forwarded to OpenAI
+const MAX_IMAGES  = 6;                 // max image_url items forwarded to OpenAI
+const MAX_TEXTS   = 1;                 // max text items (prompt) forwarded to OpenAI
 
 // ── Entry point ──────────────────────────────────────────────────────────────
 
@@ -116,10 +117,17 @@ export default {
       return jsonError(400, "No valid user message found");
     }
 
-    // Whitelist only image_url and text items; enforce MAX_ITEMS cap
-    const sanitizedContent = userMsg.content
-      .filter(item => item.type === "image_url" || item.type === "text")
-      .slice(0, MAX_ITEMS)
+    // Whitelist image_url and text items; partition so the prompt is always
+    // kept. Cap images (MAX_IMAGES) and texts (MAX_TEXTS) separately, then
+    // keep order images-then-text so the prompt is never sliced off.
+    const images = userMsg.content
+      .filter(item => item.type === "image_url")
+      .slice(0, MAX_IMAGES);
+    const texts = userMsg.content
+      .filter(item => item.type === "text")
+      .slice(0, MAX_TEXTS);
+
+    const sanitizedContent = [...images, ...texts]
       .map(item => {
         if (item.type === "text") {
           return { type: "text", text: String(item.text || "").slice(0, 4096) };

@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import Security
 
 /// Manages LemonSqueezy license key activation, validation, and deactivation
 /// for direct-distribution builds.
@@ -7,8 +9,10 @@ import Foundation
 /// from the client. The license key itself is the credential.
 ///
 /// Keychain keys used:
-///   "ls_license_key"   — raw key string stored after successful activation
-///   "ls_instance_id"   — UUID assigned by LemonSqueezy, required for validate/deactivate
+///   "ls_license_key"        — raw key string stored after successful activation
+///   "ls_instance_id"        — UUID assigned by LemonSqueezy, required for validate/deactivate
+///   "ls_last_validated_at"  — UNIX timestamp (String) of the last successful, valid validation
+///   "ls_last_known_valid"   — "1" if the last decoded response said valid, "0" if it said invalid
 @MainActor
 final class LemonSqueezyManager {
 
@@ -17,8 +21,22 @@ final class LemonSqueezyManager {
 
     private let baseURL = "https://api.lemonsqueezy.com/v1/licenses"
 
-    static let licenseKeychainKey  = "ls_license_key"
-    static let instanceKeychainKey = "ls_instance_id"
+    static let licenseKeychainKey        = "ls_license_key"
+    static let instanceKeychainKey       = "ls_instance_id"
+    static let lastValidatedKeychainKey  = "ls_last_validated_at"
+    static let lastKnownValidKeychainKey = "ls_last_known_valid"
+
+    /// How long a previously-valid license stays usable while validation can't
+    /// reach a definitive server answer (offline / transient failure / pin miss).
+    private static let graceWindow: TimeInterval = 7 * 24 * 60 * 60
+
+    /// Pinned URLSession: TLS certificate pinning for api.lemonsqueezy.com.
+    /// Created once; `PinnedSessionDelegate` enforces the pin on every request.
+    private lazy var session = URLSession(
+        configuration: .ephemeral,
+        delegate: PinnedSessionDelegate(),
+        delegateQueue: nil
+    )
 
     // MARK: - Public
 
@@ -49,8 +67,15 @@ final class LemonSqueezyManager {
     }
 
     /// Validates the stored license key against LemonSqueezy.
-    /// Returns `true` on success **or** on network failure (offline grace).
-    /// Returns `false` only when LemonSqueezy explicitly says the key is invalid.
+    ///
+    /// Unified validation policy:
+    /// - A definitive server answer is always honored. If LemonSqueezy explicitly
+    ///   says the key is **invalid**, premium locks immediately — no grace.
+    /// - When validation can't get a definitive answer (offline, a server/decode
+    ///   hiccup, or a TLS-pin failure), a previously-valid license keeps working
+    ///   for a 7-day offline grace window measured from the last successful,
+    ///   *valid* validation. After the window lapses with no successful
+    ///   validation, premium locks.
     func validate() async -> Bool {
         guard
             let key        = KeychainHelper.retrieve(key: Self.licenseKeychainKey),
@@ -64,12 +89,35 @@ final class LemonSqueezyManager {
             ]
             let data = try await call(method: "POST", path: "validate", body: body)
             let response = try decoded(ValidationResponse.self, from: data)
-            return response.valid
-        } catch LemonSqueezyError.networkError {
-            return true   // benefit of the doubt when offline
+
+            if response.valid {
+                let now = String(Int(Date().timeIntervalSince1970))
+                KeychainHelper.save(key: Self.lastValidatedKeychainKey,  value: now)
+                KeychainHelper.save(key: Self.lastKnownValidKeychainKey, value: "1")
+                return true
+            } else {
+                // Explicit revocation locks immediately; the grace window does not apply.
+                KeychainHelper.save(key: Self.lastKnownValidKeychainKey, value: "0")
+                return false
+            }
         } catch {
-            return false
+            // Any thrown error (network, server/decode, or TLS-pin failure) falls
+            // back to the offline grace window rather than revoking a paying user.
+            return withinGraceWindow()
         }
+    }
+
+    /// Returns `true` iff the last decoded response was valid and that validation
+    /// happened within `graceWindow` of now. A never-validated key (no stored
+    /// timestamp) and an unparseable timestamp both fail closed.
+    private func withinGraceWindow() -> Bool {
+        guard
+            KeychainHelper.retrieve(key: Self.lastKnownValidKeychainKey) == "1",
+            let stamp = KeychainHelper.retrieve(key: Self.lastValidatedKeychainKey),
+            let lastValidatedAt = TimeInterval(stamp)
+        else { return false }
+
+        return (Date().timeIntervalSince1970 - lastValidatedAt) < Self.graceWindow
     }
 
     /// Deactivates the stored license for this machine and wipes Keychain.
@@ -117,7 +165,7 @@ final class LemonSqueezyManager {
         req.httpBody    = try JSONEncoder().encode(body)
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, _) = try await session.data(for: req)
             return data
         } catch {
             throw LemonSqueezyError.networkError(error)
@@ -154,6 +202,69 @@ final class LemonSqueezyManager {
     private struct ValidationResponse: Decodable {
         let valid: Bool
         let error: String?
+    }
+}
+
+// MARK: - TLS certificate pinning
+
+/// Enforces certificate pinning for api.lemonsqueezy.com.
+///
+/// The pinned values are **full-certificate DER SHA-256 digests** (base64), not
+/// SPKI hashes — i.e. `base64(SHA256(SecCertificateCopyData(cert)))`. A handshake
+/// is accepted only if it passes default trust evaluation *and* at least one
+/// certificate in the presented chain matches a pin.
+///
+/// Refreshing pins when the chain rotates: leaf certificates rotate often
+/// (~90 days for Google Trust Services), so the durable pin is the intermediate
+/// (Google Trust Services WE1). To regenerate, capture the live DER for each cert
+/// and run `openssl x509 -inform DER -in cert.der -outform DER | openssl dgst -sha256 -binary | base64`.
+/// See SECURITY_FIXES_PLAN.md for the full rotation runbook.
+///
+/// Not `@MainActor`: URLSession invokes the delegate on a background queue.
+private final class PinnedSessionDelegate: NSObject, URLSessionDelegate {
+
+    /// Full-certificate DER SHA-256 pins (base64).
+    private static let pinnedCertHashes: Set<String> = [
+        "DSBPplLAHWrv9JDYzl8B6S1GoUpryDWPx3lu8xeBooo=", // leaf CN=lemonsqueezy.com
+        "HfwWBfutNY2LyET3bRUgP6ycpcGnn9SFf/ryhk++v5Y="  // intermediate Google Trust Services WE1 (durable across leaf rotation)
+    ]
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+
+        guard let serverTrust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        // Default validation first: chain to a trusted root, hostname, expiry, etc.
+        guard SecTrustEvaluateWithError(serverTrust, nil) else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        guard let chain = SecTrustCopyCertificateChain(serverTrust) as? [SecCertificate] else {
+            completionHandler(.cancelAuthenticationChallenge, nil)
+            return
+        }
+
+        for cert in chain {
+            let der = SecCertificateCopyData(cert) as Data
+            let hash = Data(SHA256.hash(data: der)).base64EncodedString()
+            if Self.pinnedCertHashes.contains(hash) {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+                return
+            }
+        }
+
+        completionHandler(.cancelAuthenticationChallenge, nil)
     }
 }
 

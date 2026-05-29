@@ -171,13 +171,13 @@ enum BatchDeleteManager {
               let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject else {
             throw DeleteError.albumCreateFailed
         }
+        UserDefaults.standard.set(id, forKey: "reviewAlbumLocalID")
         return album
     }
 
     private static func findReviewAlbum() -> PHAssetCollection? {
-        let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "title == %@", reviewAlbumName)
-        return PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: options).firstObject
+        guard let id = UserDefaults.standard.string(forKey: "reviewAlbumLocalID") else { return nil }
+        return PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
     }
 
     // MARK: - File-system deletion

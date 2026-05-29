@@ -12,6 +12,7 @@ struct PhotoQuality {
     let faceCount: Int
     let eyesOpen: Double       // [0, 1] when faceCount > 0; 0 otherwise
     let aesthetics: Double?    // [0, 1] whole-image aesthetic score (Vision, macOS 15+/iOS 18+); nil when unavailable
+    var isUndecodable: Bool = false  // true when the item's pixels couldn't be loaded/decoded; such items are never auto-deleted
 }
 
 class PhotoScorer {
@@ -41,6 +42,18 @@ class PhotoScorer {
         // Videos: skip Core Image scoring entirely. Use file size and resolution
         // (when known) as a crude quality proxy — bigger ≈ higher bitrate ≈ better.
         if item.isVideo {
+            // Decodability gate: a corrupt/undecodable video must never out-score
+            // a healthy duplicate on raw resolution/size alone. Reuse the existing
+            // video keyframe loader (PHImageManager / AVAssetImageGenerator under
+            // the hood). A nil keyframe means the file can't be read here (corrupt,
+            // or an iCloud video not downloaded at scan time) — flag it undecodable
+            // so runPipeline keeps it rather than queuing it for deletion.
+            guard await PhotoLibraryManager.loadThumbnail(
+                for: item, size: CGSize(width: 64, height: 64)
+            ) != nil else {
+                return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
+            }
+
             let pixels = Double(max(1, item.pixelWidth * item.pixelHeight))
             let bytes  = Double(item.fileByteSize ?? 0)
             // Megapixels normalised against 4K (~8 MP). File size in MB normalised against 200 MB.
@@ -61,7 +74,9 @@ class PhotoScorer {
         guard let cgImage = await PhotoLibraryManager.loadThumbnail(
             for: item, size: CGSize(width: 800, height: 800)
         ) else {
-            return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil)
+            // Couldn't load/decode (corrupt, or an iCloud asset not downloaded at
+            // scan time) — flag undecodable so runPipeline never auto-deletes it.
+            return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
         }
 
         let ctx = CIContext(options: [.useSoftwareRenderer: false])

@@ -104,6 +104,12 @@ final class ReviewViewModel: ObservableObject {
     /// Read from UserDefaults at scan time; favourited items are auto-protected.
     private var protectedAssetIDs: Set<String> = []
 
+    /// Re-entry guard against double-delete. Set on entry to deleteGroup /
+    /// confirmDelete and cleared on every exit path so a second rapid tap
+    /// (e.g. double-tap on the delete button) can't kick off a concurrent
+    /// deletion of the same items.
+    private var isDeleting = false
+
     var totalToDelete: Int {
         groups.reduce(0) { $0 + $1.itemsToDelete.count }
     }
@@ -393,6 +399,12 @@ final class ReviewViewModel: ObservableObject {
                 }
             }
 
+            // Never auto-delete an item we couldn't decode/assess (corrupt file,
+            // or an iCloud asset not downloaded at scan time). Force it into the
+            // keepers so itemsToDelete can never include it — a 0 score otherwise
+            // makes it the proposed deletion, the inverse of safe.
+            for (idx, q) in qualities.enumerated() where q.isUndecodable { kept.insert(idx) }
+
             var photoGroup = PhotoGroup(
                 items: group,
                 proposedKeeperIndex: best,
@@ -442,7 +454,14 @@ final class ReviewViewModel: ObservableObject {
                 for await (idx, result) in taskGroup {
                     if Task.isCancelled { break }
                     guard let result, idx < groups.count else { continue }
-                    groups[idx].claudeExplanation = result.reason
+                    // Surface the AI result as a suggestion the same way the
+                    // on-demand requestAIReview path does — record it into
+                    // aiReviews (keyed by provider) and clear any stale error /
+                    // in-flight marker. The user accepts it via the existing
+                    // Accept-AI-suggestion UI; we do NOT auto-apply the keeper.
+                    groups[idx].aiReviews[result.provider.rawValue] = result
+                    groups[idx].aiErrors.removeValue(forKey: result.provider.rawValue)
+                    groups[idx].reviewingProviders.remove(result.provider.rawValue)
                 }
             }
         }
@@ -566,7 +585,14 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func deleteGroup(groupID: UUID) async {
-        guard let idx = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        guard !isDeleting else { return }
+        isDeleting = true
+        // NOTE: no function-scope defer here — this function returns before the
+        // DispatchQueue.main.async block below runs its @Published mutations, so
+        // the flag must survive past the return. Every synchronous early-return
+        // path clears it explicitly; the deferred block clears it via its own
+        // defer (covering both its internal guard-fail and normal completion).
+        guard let idx = groups.firstIndex(where: { $0.id == groupID }) else { isDeleting = false; return }
         let toDelete = groups[idx].itemsToDelete
         let groupSnapshot = groups[idx]  // capture before await; groups may mutate during suspension
         let mode: DeletionMode = UserDefaults.standard.bool(forKey: "holdForReview") ? .holdForReview : .directDelete
@@ -579,6 +605,7 @@ final class ReviewViewModel: ObservableObject {
                 receipt = nil
             }
         } catch {
+            isDeleting = false
             DispatchQueue.main.async { [weak self] in
                 self?.scanState = .error(error.localizedDescription)
             }
@@ -598,6 +625,12 @@ final class ReviewViewModel: ObservableObject {
         }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            // Clear the re-entry guard here, at the end of the deferred work —
+            // not at function scope, which would fire before this block runs.
+            // A defer covers both the internal `guard let currentIdx` early
+            // return and the normal completion path exactly once. (If self is
+            // nil the object is deallocating, so the flag is moot.)
+            defer { self.isDeleting = false }
             if let receipt, !receipt.trashedAssetIDs.isEmpty {
                 self.lastReceipt = receipt
                 self.scheduleUndoExpiry(seconds: 30)
@@ -617,6 +650,12 @@ final class ReviewViewModel: ObservableObject {
     }
 
     func confirmDelete() async {
+        guard !isDeleting else { return }
+        isDeleting = true
+        // confirmDelete is fully awaited inline, so a function-scope defer is
+        // safe here — it fires on every exit (success or catch). Placed after
+        // the guard so a blocked re-entry can't clear the in-flight call's flag.
+        defer { isDeleting = false }
         let toDeleteByGroup = groups.map { ($0, $0.itemsToDelete) }
         let toDelete = toDeleteByGroup.flatMap(\.1)
         let deletedCount = toDelete.count
