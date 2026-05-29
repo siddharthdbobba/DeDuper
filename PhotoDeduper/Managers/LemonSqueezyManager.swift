@@ -64,6 +64,14 @@ final class LemonSqueezyManager {
 
         KeychainHelper.save(key: Self.licenseKeychainKey,  value: clean)
         KeychainHelper.save(key: Self.instanceKeychainKey, value: instanceID)
+
+        // A successful activation is itself definitive proof of validity — seed
+        // the grace keys so a user who goes offline (or hits a TLS-pin miss)
+        // before the first validate() isn't locked out by withinGraceWindow()'s
+        // fail-closed default.
+        let now = String(Int(Date().timeIntervalSince1970))
+        KeychainHelper.save(key: Self.lastValidatedKeychainKey,  value: now)
+        KeychainHelper.save(key: Self.lastKnownValidKeychainKey, value: "1")
     }
 
     /// Validates the stored license key against LemonSqueezy.
@@ -136,6 +144,10 @@ final class LemonSqueezyManager {
 
         KeychainHelper.delete(key: Self.licenseKeychainKey)
         KeychainHelper.delete(key: Self.instanceKeychainKey)
+        // Clear grace state too, so a later reactivation can't ride this
+        // license's stale last-known-valid timestamp.
+        KeychainHelper.delete(key: Self.lastValidatedKeychainKey)
+        KeychainHelper.delete(key: Self.lastKnownValidKeychainKey)
     }
 
     /// Whether a license key is stored in Keychain (doesn't re-validate).

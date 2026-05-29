@@ -479,10 +479,24 @@ final class ReviewViewModel: ObservableObject {
 
     // MARK: - User actions
 
+    /// Indices that must always remain keepers in a group, regardless of which
+    /// photo is chosen: protected items (favorites) and undecodable items (whose
+    /// pixels couldn't be assessed — never auto-delete). `acceptAISuggestion` and
+    /// `selectKeeper` rebuild keptIndices from scratch and must re-apply these,
+    /// otherwise an undecodable item silently falls into the deletion set.
+    private func mandatoryKeepers(in group: PhotoGroup) -> Set<Int> {
+        var indices = Set<Int>()
+        for (idx, item) in group.items.enumerated() where item.isProtected { indices.insert(idx) }
+        for (idx, q) in group.qualities.enumerated() where q.isUndecodable { indices.insert(idx) }
+        return indices
+    }
+
     func toggleKeep(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        // Protected items cannot be marked for deletion via this toggle.
-        if itemIndex < groups[i].items.count, groups[i].items[itemIndex].isProtected {
+        // Protected items and undecodable items (which must never be auto-deleted)
+        // cannot be marked for deletion via this toggle.
+        if itemIndex < groups[i].items.count,
+           groups[i].items[itemIndex].isProtected || groups[i].qualities[itemIndex].isUndecodable {
             return
         }
         if groups[i].keptIndices.contains(itemIndex) {
@@ -563,14 +577,14 @@ final class ReviewViewModel: ObservableObject {
         guard let i = groups.firstIndex(where: { $0.id == groupID }),
               let result = groups[i].aiReviews[provider.rawValue] else { return }
         var kept: Set<Int> = [result.winnerIndex]
-        for (idx, item) in groups[i].items.enumerated() where item.isProtected { kept.insert(idx) }
+        kept.formUnion(mandatoryKeepers(in: groups[i]))
         groups[i].keptIndices = kept
     }
 
     func selectKeeper(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var kept: Set<Int> = [itemIndex]
-        for (idx, item) in groups[i].items.enumerated() where item.isProtected { kept.insert(idx) }
+        kept.formUnion(mandatoryKeepers(in: groups[i]))
         groups[i].keptIndices = kept
     }
 
@@ -852,11 +866,17 @@ final class ReviewViewModel: ObservableObject {
     // MARK: - Audit logging
 
     private func logDeletions(_ items: [PhotoItem], in group: PhotoGroup, receipt: DeletionReceipt) {
-        let aiProvider = group.aiReviews.keys.sorted().first
+        // Attribute an AI provider/reason only when the kept photo is actually
+        // the AI's suggested winner — auto-review surfaces a suggestion without
+        // applying it, so otherwise the logged reason would describe a photo that
+        // wasn't kept. Falls back to the on-device explanation.
+        let aiProvider = group.aiReviews.keys.sorted().first { key in
+            guard let review = group.aiReviews[key] else { return false }
+            return group.keptIndices.contains(review.winnerIndex)
+        }
         let aiReason: String? = aiProvider
             .flatMap { group.aiReviews[$0] }
             .map(\.reason)
-            ?? group.claudeExplanation
             ?? group.localExplanation
         let entries = items.map { item in
             AuditEntry(

@@ -113,6 +113,12 @@ final class AuditLogger {
     /// decode is in a `nonisolated static` helper so the background write
     /// closures can reuse it without touching main-actor state.
     nonisolated func readAll() -> [AuditEntry] {
+        // Deliberately read WITHOUT queue.sync: a query that coincides with a
+        // bulk delete's pending writes must not block the main thread waiting on
+        // them — that main-thread stall is exactly what P6 removed. Writes are
+        // .atomic so a read never tears; the only cost is that a read racing an
+        // in-flight write may be momentarily stale, which is benign here (the undo
+        // bookkeeping read runs well after its write, and the stats are advisory).
         Self.readAll(from: fileURL)
     }
 

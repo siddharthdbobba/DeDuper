@@ -48,7 +48,7 @@ struct GroupRow: View {
                 }
 
                 HStack(spacing: 4) {
-                    if group.claudeExplanation != nil {
+                    if !group.aiReviews.isEmpty {
                         Image(systemName: "sparkles")
                             .font(.caption2)
                             .foregroundStyle(.purple)

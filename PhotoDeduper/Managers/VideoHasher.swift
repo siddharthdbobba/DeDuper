@@ -5,7 +5,9 @@ import Photos
 
 /// Computes a perceptual fingerprint for a video by hashing three sampled
 /// keyframes (start, middle, end). Two videos are considered identical when
-/// every keyframe hash matches within the configured Hamming threshold.
+/// their hashes match within the configured Hamming threshold at the keyframe
+/// positions they share (requiring at least two shared positions) and their
+/// durations are within 10%.
 ///
 /// Designed to be cheap enough to run on every video in a Photos library —
 /// keyframe extraction is the slow part (~50–200 ms per video), but hashing
@@ -86,8 +88,9 @@ struct VideoHasher {
     /// Considers two video fingerprints to be duplicates when every keyframe
     /// hash sampled at a *shared* position is within `threshold` Hamming bits
     /// AND their durations are within 10% of each other. Positions present in
-    /// only one fingerprint are ignored; if the two share no positions at all
-    /// they are conservatively treated as not-similar.
+    /// only one fingerprint are ignored; the two must share at least two
+    /// positions, otherwise they are conservatively treated as not-similar
+    /// (a single coincidentally-matching frame is too weak to group on).
     static func areSimilar(_ a: VideoFingerprint, _ b: VideoFingerprint, threshold: Int = 12) -> Bool {
         let longer = max(a.duration, b.duration)
         guard longer > 0 else { return false }
@@ -96,8 +99,11 @@ struct VideoHasher {
 
         // Compare only keyframes sampled at the same position; a hash at
         // position 1 (middle) is never compared against position 0 (start).
+        // Require at least two shared keyframe positions: a single coincidentally
+        // similar frame plus near-equal duration is too weak and risks grouping
+        // distinct videos into a delete-candidate cluster.
         let sharedPositions = Set(a.hashes.keys).intersection(b.hashes.keys)
-        guard !sharedPositions.isEmpty else { return false }
+        guard sharedPositions.count >= 2 else { return false }
         let grouper = SimilarityGrouper()
         for position in sharedPositions {
             guard let ha = a.hashes[position], let hb = b.hashes[position] else { continue }
