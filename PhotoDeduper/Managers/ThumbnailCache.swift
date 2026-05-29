@@ -16,6 +16,18 @@ final class ThumbnailCache {
     private let manager = PHCachingImageManager()
     private var warmedAssets: [PHAsset] = []
 
+    /// Shared between `startCachingImages` and `stopCachingImages`.
+    /// `PHCachingImageManager` matches a prefetch by (targetSize, contentMode, options),
+    /// so stop must pass the *same* options instance the start used — otherwise the
+    /// prefetch is never cancelled and the cached working set grows across rescans.
+    private let cachingOptions: PHImageRequestOptions = {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .fastFormat
+        opts.resizeMode   = .fast
+        opts.isNetworkAccessAllowed = true
+        return opts
+    }()
+
     private init() {}
 
     // MARK: - Cache control
@@ -34,20 +46,16 @@ final class ThumbnailCache {
                 for: warmedAssets,
                 targetSize: Self.targetSize,
                 contentMode: .aspectFit,
-                options: nil
+                options: cachingOptions
             )
         }
         warmedAssets = assets
         guard !assets.isEmpty else { return }
-        let opts = PHImageRequestOptions()
-        opts.deliveryMode = .fastFormat
-        opts.resizeMode   = .fast
-        opts.isNetworkAccessAllowed = true
         manager.startCachingImages(
             for: assets,
             targetSize: Self.targetSize,
             contentMode: .aspectFit,
-            options: opts
+            options: cachingOptions
         )
     }
 

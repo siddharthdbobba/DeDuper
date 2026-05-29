@@ -116,11 +116,17 @@ class SimilarityGrouper {
                 if component.count >= 2 { components.append(component) }
             }
 
-            // Keep the largest component (the main burst cluster); isolated outliers are excluded.
-            guard let largest = components.max(by: { $0.count < $1.count }) else { continue }
-            let keepSet = Set(largest)
-            let verified = group.enumerated().compactMap { idx, item in keepSet.contains(idx) ? item : nil }
-            if verified.count >= 2 { result.append(verified) }
+            // Emit every connected component as its own verified group. A single
+            // input group can split into multiple distinct clusters (e.g. two
+            // unrelated duplicate pairs that happened to share a time window or
+            // burst), and dropping all but the largest would silently discard
+            // real duplicates. Components are already filtered to size >= 2 above,
+            // so isolated outliers (size 1) remain excluded.
+            for component in components {
+                let keepSet = Set(component)
+                let verified = group.enumerated().compactMap { idx, item in keepSet.contains(idx) ? item : nil }
+                if verified.count >= 2 { result.append(verified) }
+            }
         }
 
         return result

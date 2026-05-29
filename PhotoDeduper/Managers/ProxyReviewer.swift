@@ -1,6 +1,5 @@
 import Foundation
 import CryptoKit
-import ImageIO
 
 /// Sends photo comparison requests to the developer-hosted Cloudflare Worker
 /// proxy, which holds the real OpenAI key server-side.
@@ -27,7 +26,7 @@ struct ProxyReviewer {
             guard let img = await PhotoLibraryManager.loadThumbnail(
                     for: items[originalIndex],
                     size: CGSize(width: 800, height: 800)),
-                  let b64 = jpegBase64(img) else {
+                  let b64 = img.jpegBase64(quality: 0.9) else {
                 throw ReviewerError.imageLoadFailed
             }
             // OpenAI image_url format — omit "detail" so the proxy's sanitizer
@@ -131,17 +130,5 @@ struct ProxyReviewer {
         req.setValue(AppConfig.appVersion, forHTTPHeaderField: "X-App-Version")
         req.httpBody = body
         return req
-    }
-
-    // MARK: - Helpers
-
-    private func jpegBase64(_ image: CGImage) -> String? {
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil)
-        else { return nil }
-        CGImageDestinationAddImage(dest, image,
-            [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { return nil }
-        return (data as Data).base64EncodedString()
     }
 }

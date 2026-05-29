@@ -17,6 +17,11 @@ struct PhotoQuality {
 
 class PhotoScorer {
 
+    /// Shared `CIContext` reused across every `evaluate` call. A `CIContext` is
+    /// expensive to construct (it allocates GPU/Metal state) and is thread-safe,
+    /// so we build it once instead of per-photo.
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
     /// Returns one `PhotoQuality` per item. Async so callers can also use the
     /// shortcut `scoreGroup` that returns just `[Double]` totals.
     func evaluateGroup(_ items: [PhotoItem]) async -> [PhotoQuality] {
@@ -79,18 +84,20 @@ class PhotoScorer {
             return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
         }
 
-        let ctx = CIContext(options: [.useSoftwareRenderer: false])
         let ci = CIImage(cgImage: cgImage)
-        let sharpness = computeSharpness(ci, context: ctx)
-        let exposure  = computeExposure(ci, context: ctx)
+        let sharpness = computeSharpness(ci, context: ciContext)
+        let exposure  = computeExposure(ci, context: ciContext)
 
-        // Face analysis runs in parallel via Vision; it's cheap (~10-30 ms per photo at 800px).
-        let face = await FaceAnalyzer.analyze(cgImage)
-
-        // Whole-image aesthetic quality (Vision, macOS 15+/iOS 18+). nil on the
-        // iOS 17 build / macOS 14, where we fall back to the technical-only
+        // Face analysis and aesthetic scoring are two independent Vision passes,
+        // so kick them off concurrently and await both rather than running them
+        // back-to-back. Face analysis is cheap (~10-30 ms per photo at 800px);
+        // aesthetics is the whole-image quality model (macOS 15+/iOS 18+), nil on
+        // the iOS 17 build / macOS 14, where we fall back to the technical-only
         // weighting below.
-        let aesthetics = await AestheticsScorer.score(ci)
+        async let faceTask = FaceAnalyzer.analyze(cgImage)
+        async let aestheticsTask = AestheticsScorer.score(ci)
+        let face = await faceTask
+        let aesthetics = await aestheticsTask
 
         // Weighting — goal is the best OVERALL photo, not the most-open eyes.
         //   - When the aesthetics model is available it leads the decision; eye

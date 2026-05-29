@@ -79,7 +79,24 @@ export default {
       return jsonError(401, "Invalid signature");
     }
 
-    // Step 5 — Rate limiting via KV
+    // Step 5 — One-time-use (replay) protection
+    // The verified signature is bound to (timestamp, body), so a captured tuple
+    // can otherwise be replayed for up to TS_WINDOW. Record each accepted
+    // signature in KV with a TTL of TS_WINDOW; once a signature is seen again
+    // we reject it. The key auto-expires precisely when the timestamp can no
+    // longer pass the freshness window above, so this needs no manual cleanup.
+    // Caveat: KV is eventually consistent — a near-simultaneous replay hitting a
+    // different edge PoP before the put propagates may still slip through, but
+    // this closes the common (single-PoP, sequential) replay window.
+    const nonceKey = `nonce:${expectedSig}`;
+    if (await env.RATE_LIMIT_KV.get(nonceKey)) {
+      return jsonError(401, "Replay detected");
+    }
+    // Awaited (not fire-and-forget) since it precedes the slow OpenAI fetch and
+    // we want the nonce durably recorded before forwarding upstream.
+    await env.RATE_LIMIT_KV.put(nonceKey, "1", { expirationTtl: TS_WINDOW });
+
+    // Step 6 — Rate limiting via KV
     const ip = request.headers.get("CF-Connecting-IP") || "unknown";
     const hourEpoch = Math.floor(Date.now() / 3_600_000);
     const dayStr = new Date().toISOString().slice(0, 10);
@@ -98,7 +115,7 @@ export default {
     env.RATE_LIMIT_KV.put(hourKey, String(hourCount + 1), { expirationTtl: 3600 });
     env.RATE_LIMIT_KV.put(dayKey,  String(dayCount  + 1), { expirationTtl: 86400 });
 
-    // Step 6 — Parse and sanitize body (NEVER forward client body directly)
+    // Step 7 — Parse and sanitize body (NEVER forward client body directly)
     let parsed;
     try {
       parsed = JSON.parse(new TextDecoder().decode(bodyBuffer));
@@ -150,7 +167,7 @@ export default {
       messages: [{ role: "user", content: sanitizedContent }],
     };
 
-    // Step 7 — Forward to OpenAI
+    // Step 8 — Forward to OpenAI
     const openaiKey = env.OPENAI_API_KEY;
     if (!openaiKey) return jsonError(500, "Proxy misconfigured");
 

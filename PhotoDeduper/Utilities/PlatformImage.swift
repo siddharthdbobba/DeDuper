@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 // MARK: - Cross-platform image type alias
 //
@@ -51,3 +52,17 @@ extension SwiftUI.Image {
     }
 }
 #endif
+
+// MARK: - JPEG base64 encoding
+
+extension CGImage {
+    /// Encodes the image as a JPEG and returns it base64-encoded.
+    /// Shared by the AI reviewers, which embed images as base64 JPEG in their request bodies.
+    func jpegBase64(quality: CGFloat = 0.9) -> String? {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, self, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return (data as Data).base64EncodedString()
+    }
+}

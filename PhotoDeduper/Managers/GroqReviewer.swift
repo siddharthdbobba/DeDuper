@@ -1,5 +1,4 @@
 import Foundation
-import ImageIO
 
 struct GroqReviewer {
 
@@ -34,7 +33,7 @@ struct GroqReviewer {
             guard let img = await PhotoLibraryManager.loadThumbnail(
                     for: items[originalIndex],
                     size: CGSize(width: 800, height: 800)),
-                  let b64 = jpegBase64(img) else {
+                  let b64 = img.jpegBase64(quality: 0.9) else {
                 throw ReviewerError.imageLoadFailed
             }
             // Groq uses the same image_url format as OpenAI; omit "detail" — some models reject it.
@@ -122,13 +121,5 @@ struct GroqReviewer {
             return String(raw.prefix(300))
         }
         return nil
-    }
-
-    private func jpegBase64(_ image: CGImage) -> String? {
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
-        guard CGImageDestinationFinalize(dest) else { return nil }
-        return (data as Data).base64EncodedString()
     }
 }

@@ -83,15 +83,20 @@ enum KeychainHelper {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    /// Defense-in-depth: overwrite file content with zeros before removing,
-    /// so a casual undelete tool doesn't recover plaintext. Not a substitute
-    /// for actual secure-erase on a copy-on-write filesystem, but reduces
-    /// the worst-case footprint.
+    /// Best-effort defense-in-depth: overwrite file content with zeros in place
+    /// before removing, so a casual undelete tool is less likely to recover
+    /// plaintext. This is NOT a guaranteed secure erase: on copy-on-write
+    /// filesystems (APFS) the overwrite may land in freshly allocated blocks,
+    /// and SSD wear-leveling can leave the original blocks physically intact.
+    /// Treat it as harm reduction, not a secure-wipe guarantee.
     private static func wipeFile(at url: URL) {
         if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int),
            size > 0, size < 1_048_576 {  // 1 MB cap; legitimate key files are <1 KB
             let zeros = Data(count: size)
-            try? zeros.write(to: url, options: .atomic)
+            // Write WITHOUT .atomic so the zeros go to the existing file in place,
+            // rather than to a temp file that's renamed over the original (which
+            // would leave the original plaintext blocks untouched).
+            try? zeros.write(to: url)
         }
         try? FileManager.default.removeItem(at: url)
     }

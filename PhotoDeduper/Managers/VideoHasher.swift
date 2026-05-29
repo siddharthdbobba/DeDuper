@@ -12,7 +12,11 @@ import Photos
 /// itself is O(64).
 struct VideoFingerprint {
     let item: PhotoItem
-    let hashes: [UInt64]   // start, middle, end
+    /// Keyframe hashes keyed by sampling position (0 = start, 1 = middle,
+    /// 2 = end). A position is absent when that keyframe failed to extract,
+    /// so positions stay aligned across fingerprints even when some frames
+    /// are missing. Compared position-by-position in `areSimilar`.
+    let hashes: [Int: UInt64]
     let duration: Double
 }
 
@@ -61,13 +65,15 @@ struct VideoHasher {
         generator.requestedTimeToleranceAfter  = CMTime(seconds: 0.5, preferredTimescale: 600)
 
         let grouper = SimilarityGrouper()
-        var hashes: [UInt64] = []
-        for seconds in sampleTimes {
+        // Key each hash by its sampling position so a failed/missing frame
+        // leaves a gap rather than shifting later frames into earlier slots.
+        var hashes: [Int: UInt64] = [:]
+        for (position, seconds) in sampleTimes.enumerated() {
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             do {
                 let cg = try await generateCGImage(generator: generator, at: time)
                 if let hash = grouper.differenceHash(cg) {
-                    hashes.append(hash)
+                    hashes[position] = hash
                 }
             } catch {
                 continue
@@ -77,20 +83,25 @@ struct VideoHasher {
         return VideoFingerprint(item: item, hashes: hashes, duration: duration)
     }
 
-    /// Considers two video fingerprints to be duplicates when every available
-    /// keyframe hash is within `threshold` Hamming bits AND their durations are
-    /// within 10% of each other.
+    /// Considers two video fingerprints to be duplicates when every keyframe
+    /// hash sampled at a *shared* position is within `threshold` Hamming bits
+    /// AND their durations are within 10% of each other. Positions present in
+    /// only one fingerprint are ignored; if the two share no positions at all
+    /// they are conservatively treated as not-similar.
     static func areSimilar(_ a: VideoFingerprint, _ b: VideoFingerprint, threshold: Int = 12) -> Bool {
         let longer = max(a.duration, b.duration)
         guard longer > 0 else { return false }
         let durationDelta = abs(a.duration - b.duration) / longer
         guard durationDelta < 0.10 else { return false }
 
-        let pairs = min(a.hashes.count, b.hashes.count)
-        guard pairs > 0 else { return false }
+        // Compare only keyframes sampled at the same position; a hash at
+        // position 1 (middle) is never compared against position 0 (start).
+        let sharedPositions = Set(a.hashes.keys).intersection(b.hashes.keys)
+        guard !sharedPositions.isEmpty else { return false }
         let grouper = SimilarityGrouper()
-        for i in 0..<pairs {
-            if grouper.hammingDistance(a.hashes[i], b.hashes[i]) >= threshold {
+        for position in sharedPositions {
+            guard let ha = a.hashes[position], let hb = b.hashes[position] else { continue }
+            if grouper.hammingDistance(ha, hb) >= threshold {
                 return false
             }
         }

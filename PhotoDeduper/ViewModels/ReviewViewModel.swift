@@ -269,6 +269,10 @@ final class ReviewViewModel: ObservableObject {
         currentScanTask = nil
         if case .scanning = scanState {
             scanState = .idle
+            // Clear partially-scored clusters so a cancelled scan doesn't leave
+            // stale groups in the published array (matches runPipeline's start).
+            groups = []
+            selectedGroupID = nil
         }
     }
 
