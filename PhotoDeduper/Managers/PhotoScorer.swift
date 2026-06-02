@@ -13,6 +13,11 @@ struct PhotoQuality {
     let eyesOpen: Double       // [0, 1] when faceCount > 0; 0 otherwise
     let aesthetics: Double?    // [0, 1] whole-image aesthetic score (Vision, macOS 15+/iOS 18+); nil when unavailable
     var isUndecodable: Bool = false  // true when the item's pixels couldn't be loaded/decoded; such items are never auto-deleted
+
+    /// A zeroed score — used for cancelled evaluations.
+    static let zero = PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil)
+    /// A zeroed score flagged undecodable so `runPipeline` never auto-deletes the item.
+    static let undecodable = PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
 }
 
 class PhotoScorer {
@@ -22,25 +27,18 @@ class PhotoScorer {
     /// so we build it once instead of per-photo.
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
-    /// Returns one `PhotoQuality` per item. Async so callers can also use the
-    /// shortcut `scoreGroup` that returns just `[Double]` totals.
+    /// Returns one `PhotoQuality` per item, in the same order.
     func evaluateGroup(_ items: [PhotoItem]) async -> [PhotoQuality] {
         var results: [PhotoQuality] = []
         results.reserveCapacity(items.count)
         for item in items {
             if Task.isCancelled {
-                results.append(PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil))
+                results.append(.zero)
                 continue
             }
             results.append(await evaluate(item))
         }
         return results
-    }
-
-    /// Backwards-compatible shortcut used by older call sites — returns just totals.
-    func scoreGroup(_ items: [PhotoItem]) async -> [Double] {
-        let qualities = await evaluateGroup(items)
-        return qualities.map(\.total)
     }
 
     func evaluate(_ item: PhotoItem) async -> PhotoQuality {
@@ -56,7 +54,7 @@ class PhotoScorer {
             guard await PhotoLibraryManager.loadThumbnail(
                 for: item, size: CGSize(width: 64, height: 64)
             ) != nil else {
-                return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
+                return .undecodable
             }
 
             let pixels = Double(max(1, item.pixelWidth * item.pixelHeight))
@@ -81,7 +79,7 @@ class PhotoScorer {
         ) else {
             // Couldn't load/decode (corrupt, or an iCloud asset not downloaded at
             // scan time) — flag undecodable so runPipeline never auto-deletes it.
-            return PhotoQuality(total: 0, sharpness: 0, exposure: 0, faceScore: nil, faceCount: 0, eyesOpen: 0, aesthetics: nil, isUndecodable: true)
+            return .undecodable
         }
 
         let ci = CIImage(cgImage: cgImage)

@@ -51,7 +51,12 @@ enum BatchDeleteManager {
     static let reviewAlbumName = "PhotoDeduper Review"
 
     /// Deletes (or stages) PhotoItems regardless of source.
-    static func deleteItems(_ items: [PhotoItem], mode: DeletionMode = .directDelete) async throws -> DeletionReceipt {
+    ///
+    /// `folderScope` is the security-scoped folder URL a folder scan was started
+    /// from. Held open across the file-trash work so child file URLs (which carry
+    /// no bookmark of their own) stay accessible at delete time. `nil` for Photos
+    /// library scans, which delete assets, not files.
+    static func deleteItems(_ items: [PhotoItem], mode: DeletionMode = .directDelete, folderScope: URL? = nil) async throws -> DeletionReceipt {
         let assets = items.compactMap { item -> PHAsset? in
             if case .asset(let a) = item.source { return a }
             return nil
@@ -64,11 +69,7 @@ enum BatchDeleteManager {
         switch mode {
         case .directDelete:
             if !assets.isEmpty { try await deletePhotoAssets(assets) }
-            var trashedURLs: [URL] = []
-            for url in urls {
-                try trashFile(url)
-                trashedURLs.append(url)
-            }
+            let trashedURLs = try trashFiles(urls, folderScope: folderScope)
             return DeletionReceipt(
                 trashedAssetIDs: assets.map(\.localIdentifier),
                 trashedFileURLs: trashedURLs,
@@ -81,11 +82,7 @@ enum BatchDeleteManager {
             if !assets.isEmpty {
                 try await addToReviewAlbum(assets)
             }
-            var trashedURLs: [URL] = []
-            for url in urls {
-                try trashFile(url)
-                trashedURLs.append(url)
-            }
+            let trashedURLs = try trashFiles(urls, folderScope: folderScope)
             return DeletionReceipt(
                 trashedAssetIDs: [],
                 trashedFileURLs: trashedURLs,
@@ -171,23 +168,40 @@ enum BatchDeleteManager {
               let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject else {
             throw DeleteError.albumCreateFailed
         }
-        UserDefaults.standard.set(id, forKey: "reviewAlbumLocalID")
+        AppDefaults.reviewAlbumLocalID = id
         return album
     }
 
     private static func findReviewAlbum() -> PHAssetCollection? {
-        guard let id = UserDefaults.standard.string(forKey: "reviewAlbumLocalID") else { return nil }
+        guard let id = AppDefaults.reviewAlbumLocalID else { return nil }
         return PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
     }
 
     // MARK: - File-system deletion
 
+    /// Trashes every URL while holding the parent folder's security scope open,
+    /// so child URLs (which carry no bookmark of their own) stay accessible.
+    private static func trashFiles(_ urls: [URL], folderScope: URL?) throws -> [URL] {
+        guard !urls.isEmpty else { return [] }
+        let scoped = folderScope?.startAccessingSecurityScopedResource() ?? false
+        defer { if scoped { folderScope?.stopAccessingSecurityScopedResource() } }
+
+        var trashed: [URL] = []
+        for url in urls {
+            try trashFile(url)
+            trashed.append(url)
+        }
+        return trashed
+    }
+
     private static func trashFile(_ url: URL) throws {
 #if os(macOS)
-        guard url.startAccessingSecurityScopedResource() else {
-            throw DeleteError.accessDenied
-        }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // Best-effort per-child scope: a child URL enumerated under a
+        // security-scoped folder has no bookmark of its own, so this often
+        // returns false even when access is valid via the parent scope held by
+        // `trashFiles`. Don't hard-fail on it — let `trashItem` be the arbiter.
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         } catch {

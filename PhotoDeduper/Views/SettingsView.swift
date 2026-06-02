@@ -3,21 +3,16 @@ import Photos
 import UniformTypeIdentifiers
 
 struct SettingsView: View {
-    @State private var autoReviewEnabled: Bool = UserDefaults.standard.bool(forKey: "autoReviewEnabled")
-    @ObservedObject private var entitlements = EntitlementStore.shared
-    @State private var showPaywall = false
-
     @State private var sensitivity: Sensitivity = Sensitivity.current()
-    @State private var timeWindow: Double = UserDefaults.standard.object(forKey: "timeWindow") as? Double ?? 30
-    @State private var hashThreshold: Double = Double(UserDefaults.standard.object(forKey: "pHashThreshold") as? Int ?? 20)
-    @State private var closeCallThreshold: Double = UserDefaults.standard.object(forKey: "closeCallThreshold") as? Double ?? 15
+    @State private var timeWindow: Double = AppDefaults.timeWindow
+    @State private var hashThreshold: Double = Double(AppDefaults.pHashThreshold)
+    @State private var closeCallThreshold: Double = AppDefaults.closeCallThreshold
 
-    @State private var scanVideosToo: Bool = UserDefaults.standard.bool(forKey: "scanVideosToo")
-    @State private var crossFormatEnabled: Bool = UserDefaults.standard.object(forKey: "crossFormatEnabled") as? Bool ?? true
-    @State private var holdForReview: Bool = UserDefaults.standard.bool(forKey: "holdForReview")
+    @State private var scanVideosToo: Bool = AppDefaults.scanVideosToo
+    @State private var holdForReview: Bool = AppDefaults.holdForReview
 
     @State private var showProtectedPicker = false
-    @State private var protectedAlbumIDs: [String] = (UserDefaults.standard.array(forKey: "protectedAlbumIDs") as? [String]) ?? []
+    @State private var protectedAlbumIDs: [String] = AppDefaults.protectedAlbumIDs
     @State private var protectedAlbums: [PhotoAlbum] = []
     @State private var auditExportURL: URL?
 
@@ -26,10 +21,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                bundledAISection
-                #if DIRECT_DISTRIBUTION
-                licenseSection
-                #endif
                 groupingSection
                 behaviorSection
                 protectedAlbumsSection
@@ -49,9 +40,6 @@ struct SettingsView: View {
             .sheet(isPresented: $showProtectedPicker) {
                 ProtectedAlbumsPicker(selected: $protectedAlbumIDs)
             }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
-            }
             .task { await loadProtectedAlbumTitles() }
             .onChange(of: protectedAlbumIDs) { _, _ in
                 Task { await loadProtectedAlbumTitles() }
@@ -61,112 +49,6 @@ struct SettingsView: View {
         .frame(minWidth: 480, minHeight: 560)
 #endif
     }
-
-    // MARK: - Bundled AI section
-
-    private var bundledAISection: some View {
-        Section {
-            HStack(spacing: 10) {
-                Image(systemName: "wand.and.stars")
-                    .foregroundStyle(.blue)
-                    .imageScale(.large)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("GPT-4.1 mini")
-                        .fontWeight(.medium)
-                    Text("No key required — included with the app")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if entitlements.hasPremium {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                } else {
-                    Button("Upgrade") { showPaywall = true }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(.blue)
-                }
-            }
-            .padding(.vertical, 2)
-
-            if entitlements.hasPremium {
-                Toggle("Auto-review close calls", isOn: $autoReviewEnabled)
-            } else {
-                HStack {
-                    Text("Auto-review close calls")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Image(systemName: "lock.fill")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { showPaywall = true }
-            }
-        } header: {
-            Label("Bundled AI", systemImage: "wand.and.stars")
-        } footer: {
-            Text(entitlements.hasPremium
-                 ? "Automatically picks the best photo in close-call groups during scanning. No sign-up or API key needed."
-                 : "Upgrade to DeDuper Premium to enable AI-powered close-call resolution during scanning.")
-                .font(.caption)
-        }
-    }
-
-    // MARK: - License (Direct Distribution only)
-
-    #if DIRECT_DISTRIBUTION
-    @State private var showLicenseEntry = false
-
-    private var licenseSection: some View {
-        Section {
-            if entitlements.hasPremium {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("DeDuper Premium")
-                            .fontWeight(.medium)
-                        if let masked = LemonSqueezyManager.shared.maskedKey {
-                            Text(masked)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fontDesign(.monospaced)
-                        }
-                    }
-                }
-                .padding(.vertical, 2)
-
-                Button(role: .destructive) {
-                    Task { await entitlements.deactivateLicense() }
-                } label: {
-                    Label("Deactivate This Mac", systemImage: "xmark.circle")
-                }
-                .disabled(entitlements.isLoading)
-            } else {
-                Button {
-                    showLicenseEntry = true
-                } label: {
-                    Label("Enter License Key…", systemImage: "key.fill")
-                }
-            }
-        } header: {
-            Label("License", systemImage: "checkmark.seal")
-        } footer: {
-            if entitlements.hasPremium {
-                Text("Deactivating frees up one activation slot so you can use your key on another Mac.")
-                    .font(.caption)
-            } else {
-                Text("Already purchased? Enter your license key to unlock premium features.")
-                    .font(.caption)
-            }
-        }
-        .sheet(isPresented: $showLicenseEntry) {
-            LicenseKeyEntryView()
-        }
-    }
-    #endif
 
     // MARK: - Grouping & Scoring
 
@@ -220,9 +102,9 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Slider(value: $closeCallThreshold, in: 5...40, step: 5)
+                Slider(value: $closeCallThreshold, in: 5...40, step: 1)
                     .onChange(of: closeCallThreshold) { _, _ in sensitivity = sensitivityFromSliders() }
-                Text("When the top two scores are within this percent, the on-device resolver and AI take over.")
+                Text("When the top two scores are within this percent, the on-device resolver takes over.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -237,9 +119,6 @@ struct SettingsView: View {
         Section {
             Toggle(isOn: $scanVideosToo) {
                 Label("Include videos", systemImage: "play.rectangle")
-            }
-            Toggle(isOn: $crossFormatEnabled) {
-                Label("Find HEIC ↔ JPG duplicates", systemImage: "arrow.left.arrow.right")
             }
             Toggle(isOn: $holdForReview) {
                 Label("Hold for review (don't delete immediately)", systemImage: "tray.full")
@@ -333,21 +212,16 @@ struct SettingsView: View {
     /// This prevents a feedback loop where applying a preset updates the sliders,
     /// which in turn would fire onChange and revert sensitivity back to `.custom`.
     private func sensitivityFromSliders() -> Sensitivity {
-        if timeWindow == 15, Int(hashThreshold) == 8,  closeCallThreshold == 8  { return .conservative }
-        if timeWindow == 30, Int(hashThreshold) == 15, closeCallThreshold == 15 { return .balanced }
-        if timeWindow == 60, Int(hashThreshold) == 20, closeCallThreshold == 25 { return .aggressive }
-        return .custom
+        Sensitivity.matching(timeWindow: timeWindow, hash: Int(hashThreshold), closeCall: closeCallThreshold)
     }
 
     private func save() {
-        UserDefaults.standard.set(autoReviewEnabled, forKey: "autoReviewEnabled")
-        UserDefaults.standard.set(timeWindow, forKey: "timeWindow")
-        UserDefaults.standard.set(Int(hashThreshold), forKey: "pHashThreshold")
-        UserDefaults.standard.set(closeCallThreshold, forKey: "closeCallThreshold")
-        UserDefaults.standard.set(scanVideosToo, forKey: "scanVideosToo")
-        UserDefaults.standard.set(crossFormatEnabled, forKey: "crossFormatEnabled")
-        UserDefaults.standard.set(holdForReview, forKey: "holdForReview")
-        UserDefaults.standard.set(protectedAlbumIDs, forKey: "protectedAlbumIDs")
+        AppDefaults.timeWindow = timeWindow
+        AppDefaults.pHashThreshold = Int(hashThreshold)
+        AppDefaults.closeCallThreshold = closeCallThreshold
+        AppDefaults.scanVideosToo = scanVideosToo
+        AppDefaults.holdForReview = holdForReview
+        AppDefaults.protectedAlbumIDs = protectedAlbumIDs
         dismiss()
     }
 }
@@ -366,27 +240,37 @@ enum Sensitivity: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    static func current() -> Sensitivity {
-        let tw  = UserDefaults.standard.object(forKey: "timeWindow") as? Double ?? 30
-        let ph  = UserDefaults.standard.object(forKey: "pHashThreshold") as? Int ?? 20
-        let cc  = UserDefaults.standard.object(forKey: "closeCallThreshold") as? Double ?? 15
-        if tw == 15, ph == 8,  cc == 8  { return .conservative }
-        if tw == 30, ph == 15, cc == 15 { return .balanced }
-        if tw == 60, ph == 20, cc == 25 { return .aggressive }
+    /// The fixed threshold triple for each preset, or `nil` for `.custom`.
+    /// Single source of truth for both applying a preset and reverse-matching one.
+    var thresholds: (timeWindow: Double, hash: Int, closeCall: Double)? {
+        switch self {
+        case .conservative: (15, 8, 8)
+        case .balanced:     (30, 15, 15)
+        case .aggressive:   (60, 20, 25)
+        case .custom:       nil
+        }
+    }
+
+    /// The preset whose thresholds exactly match the given values, or `.custom`.
+    static func matching(timeWindow: Double, hash: Int, closeCall: Double) -> Sensitivity {
+        for preset in allCases {
+            if let t = preset.thresholds,
+               t.timeWindow == timeWindow, t.hash == hash, t.closeCall == closeCall {
+                return preset
+            }
+        }
         return .custom
     }
 
+    static func current() -> Sensitivity {
+        matching(timeWindow: AppDefaults.timeWindow, hash: AppDefaults.pHashThreshold, closeCall: AppDefaults.closeCallThreshold)
+    }
+
     func apply(to timeWindow: inout Double, hashThreshold: inout Double, closeCallThreshold: inout Double) {
-        switch self {
-        case .conservative:
-            timeWindow = 15;  hashThreshold = 8;  closeCallThreshold = 8
-        case .balanced:
-            timeWindow = 30;  hashThreshold = 15; closeCallThreshold = 15
-        case .aggressive:
-            timeWindow = 60;  hashThreshold = 20; closeCallThreshold = 25
-        case .custom:
-            break
-        }
+        guard let t = thresholds else { return }
+        timeWindow = t.timeWindow
+        hashThreshold = Double(t.hash)
+        closeCallThreshold = Double(t.closeCall)
     }
 }
 

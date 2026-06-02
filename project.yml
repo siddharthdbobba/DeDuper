@@ -11,11 +11,6 @@ schemes:
         PhotoDeduper: all
     run:
       config: Debug
-      # NOTE: xcodegen has an off-by-one path bug for StoreKit config files.
-      # After regenerating the xcodeproj, manually fix the xcscheme identifier:
-      #   WRONG:   ../../PhotoDeduper/DeDuper.storekit
-      #   CORRECT: ../../../PhotoDeduper/DeDuper.storekit   (3 levels up from xcschemes/)
-      storeKitConfiguration: PhotoDeduper/DeDuper.storekit
     test:
       config: Debug
     profile:
@@ -70,6 +65,4 @@ targets:
       - framework: CoreImage.framework
         weak: false
       - framework: Security.framework
-        weak: false
-      - framework: StoreKit.framework
         weak: false

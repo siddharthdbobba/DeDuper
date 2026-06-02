@@ -86,6 +86,30 @@ final class ThumbnailCache {
         }
     }
 
+    /// Requests a full-resolution, high-quality image for the review grid, where
+    /// the user inspects fine detail to choose which copy to keep. Opportunistic
+    /// delivery paints the pre-warmed thumbnail first (instant), then replaces it
+    /// with the full-quality original once decoded. `resizeMode = .none` +
+    /// `PHImageManagerMaximumSize` returns the asset at its native resolution.
+    @discardableResult
+    func requestFullImage(
+        for asset: PHAsset,
+        completion: @escaping (PlatformImage?) -> Void
+    ) -> PHImageRequestID {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .opportunistic   // fast pre-warmed copy first, then full quality
+        opts.resizeMode   = .none
+        opts.isNetworkAccessAllowed = true
+        return manager.requestImage(
+            for: asset,
+            targetSize: PHImageManagerMaximumSize,
+            contentMode: .aspectFit,
+            options: opts
+        ) { img, _ in
+            completion(img)
+        }
+    }
+
     func cancelRequest(_ id: PHImageRequestID) {
         manager.cancelImageRequest(id)
     }

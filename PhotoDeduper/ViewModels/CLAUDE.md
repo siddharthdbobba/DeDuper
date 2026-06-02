@@ -10,12 +10,11 @@
 **`PhotoGroup`** — one duplicate cluster:
 - `items: [PhotoItem]` — all photos in the group
 - `scores: [Double]` — raw quality scores from `PhotoScorer` (preserved for close-call logic)
-- `displayScores: [Double]` — computed; min-max normalised to `[0.50, 0.97]` for display. Only stretches when `score.max - score.min > 0.001`; otherwise returns raw scores unchanged.
-- `proposedKeeperIndex` — best index by raw score (overwritten by AI review if Claude runs)
-- `userSelectedKeeperIndex` — set when the user manually taps a photo
-- `keeperIndex` — `userSelectedKeeperIndex ?? proposedKeeperIndex`
+- `displayScores: [Double]` — computed; currently returns `scores` unchanged (the scorer's normalization already provides meaningful spread)
+- `proposedKeeperIndex` — best index by raw score (may be promoted to a protected item)
+- `keptIndices: Set<Int>` — the set of indices to keep; everything else is proposed for deletion
 - `isCloseCall` — true when top two raw scores are within `closeCallThreshold`%
-- `aiReviews: [String: AIReviewResult]` — keyed by `AIProvider.rawValue`
+- `localExplanation: String?` — on-device "Why this one?" reason when the Vision resolver breaks a close call
 
 **`ScanState`** — drives `ContentView` navigation:
 ```
@@ -30,9 +29,8 @@ idle → scanning(progress, message) → reviewing / error(message)
 | `startScan()` | Scan full Photos library |
 | `startAlbumScan(album:)` | Scan a specific album |
 | `startFolderScan(url:)` | Scan a local folder |
-| `requestAIReview(groupID:provider:)` | On-demand AI review of one group |
-| `overrideKeeper(groupID:itemIndex:)` | User picks a different keeper |
-| `acceptAISuggestion(groupID:provider:)` | Apply AI winner to `userSelectedKeeperIndex` |
+| `selectKeeper(groupID:itemIndex:)` | User picks the keeper for a group |
+| `toggleKeep(groupID:itemIndex:)` | Toggle an individual photo in/out of the keep set |
 | `confirmDelete()` | Execute deletion via `BatchDeleteManager` |
 | `reset()` | Return to idle |
 
@@ -40,5 +38,5 @@ idle → scanning(progress, message) → reviewing / error(message)
 
 1. `SimilarityGrouper.groupByTime` — time window grouping
 2. `SimilarityGrouper.verifyVisualSimilarity` — dHash filtering
-3. `PhotoScorer.scoreGroup` — quality scoring per group
-4. If Claude key is present: parallel `ClaudeReviewer.review` for all close-call groups
+3. `PhotoScorer.evaluateGroup` — quality scoring per group
+4. `resolveCloseCallLocally` — on-device Vision tie-break for close-call groups (no network/AI)

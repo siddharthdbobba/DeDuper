@@ -21,7 +21,7 @@ struct PhotoCard: View {
             // ── Image + dim effect (all clipped together to the rounded rect) ──
             .overlay {
                 ZStack {
-                    PhotoThumbnail(item: item)
+                    PhotoThumbnail(item: item, fullQuality: true)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // Dim deletion candidates so the keeper visually wins at a
                     // glance. Must live inside this overlay so clipShape below
@@ -57,33 +57,23 @@ struct PhotoCard: View {
     @ViewBuilder
     private var statusBadge: some View {
         if item.isProtected {
-            Label("Protected", systemImage: "lock.fill")
-                .font(.caption.bold())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.blue)
-                .foregroundStyle(.white)
-                .clipShape(Capsule())
-                .padding(8)
+            capsuleBadge("Protected", systemImage: "lock.fill", color: .blue)
         } else if isKeeper {
-            Label("KEEP", systemImage: "checkmark.circle.fill")
-                .font(.caption.bold())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.green)
-                .foregroundStyle(.white)
-                .clipShape(Capsule())
-                .padding(8)
+            capsuleBadge("KEEP", systemImage: "checkmark.circle.fill", color: .green)
         } else {
-            Label("DELETE", systemImage: "trash.fill")
-                .font(.caption.bold())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(.red)
-                .foregroundStyle(.white)
-                .clipShape(Capsule())
-                .padding(8)
+            capsuleBadge("DELETE", systemImage: "trash.fill", color: .red)
         }
+    }
+
+    private func capsuleBadge(_ text: String, systemImage: String, color: Color) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color)
+            .foregroundStyle(.white)
+            .clipShape(Capsule())
+            .padding(8)
     }
 
     @ViewBuilder
@@ -147,6 +137,11 @@ struct PhotoThumbnail: View {
     /// `.fill` crops to fill a fixed frame — used in compact sidebar thumbnails
     /// (GroupRow) where a 52×52 square looks better than a letterboxed image.
     var contentMode: ContentMode = .fit
+    /// When true, loads the full-resolution original instead of a downsized
+    /// thumbnail. Used by the review grid (`PhotoCard`) so the user inspects each
+    /// candidate at full quality before deciding which copy to keep. The compact
+    /// sidebar thumbnails (`GroupRow`) leave this off to stay on the fast path.
+    var fullQuality: Bool = false
     @State private var image: PlatformImage?
     @State private var requestID: PHImageRequestID?
 
@@ -198,17 +193,28 @@ struct PhotoThumbnail: View {
     }
 
     private func loadFromAsset(_ asset: PHAsset) {
-        requestID = ThumbnailCache.shared.requestImage(for: asset) { image in
+        let handler: (PlatformImage?) -> Void = { image in
             if let image {
                 Task { @MainActor in self.image = image }
             }
         }
+        requestID = fullQuality
+            ? ThumbnailCache.shared.requestFullImage(for: asset, completion: handler)
+            : ThumbnailCache.shared.requestImage(for: asset, completion: handler)
     }
 
     private func loadFromFileURL(_ url: URL) {
         Task.detached(priority: .userInitiated) {
             _ = url.startAccessingSecurityScopedResource()
             defer { url.stopAccessingSecurityScopedResource() }
+
+            // Full-quality grid: decode the original file at native resolution.
+            if fullQuality {
+                if let img = PlatformImage(contentsOfFile: url.path) {
+                    await MainActor.run { self.image = img }
+                }
+                return
+            }
 
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
             let opts: [CFString: Any] = [
@@ -223,8 +229,11 @@ struct PhotoThumbnail: View {
     }
 
     private func loadVideoThumbnail(_ url: URL) {
+        // Videos have no still "original"; a larger keyframe keeps the full-quality
+        // grid crisp, while the compact path stays small.
+        let side: CGFloat = fullQuality ? 1600 : 800
         Task.detached(priority: .userInitiated) {
-            let item = await PhotoLibraryManager.loadThumbnail(for: PhotoItem.from(url: url), size: CGSize(width: 800, height: 800))
+            let item = await PhotoLibraryManager.loadThumbnail(for: PhotoItem.from(url: url), size: CGSize(width: side, height: side))
             guard let cg = item else { return }
             let img = PlatformImage.from(cgImage: cg)
             await MainActor.run { self.image = img }

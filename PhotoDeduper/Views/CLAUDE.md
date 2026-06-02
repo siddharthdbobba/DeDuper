@@ -20,7 +20,7 @@ Main two-pane layout shown during `.reviewing` state.
 - **Detail**: `GroupDetailView` for the selected group
 
 **`GroupDetailView`** renders:
-- Header with photo count, AI explanation (if present), `AIReviewCard`s, and the "Ask AI" menu
+- Header with photo count, the on-device "Why this one?" explanation (if present), and Face-to-Face / Delete actions
 - `LazyVGrid` of `PhotoCard` views — passes `group.displayScores[i]` (not raw scores)
 
 ### `PhotoCard.swift`
@@ -46,5 +46,7 @@ Summary screen shown after successful deletion: kept count, deleted count, freed
 
 ### `SettingsView.swift`
 Form sheet for:
-- Claude and OpenAI API keys (saved to/deleted from Keychain on "Save")
-- Time window, hash threshold, close-call threshold sliders (saved to `UserDefaults`)
+- Grouping & Scoring: sensitivity preset, time window, hash threshold, close-call threshold sliders
+- Behavior: include videos, cross-format (HEIC↔JPG), hold-for-review
+- Protected albums, and the audit-log export
+- All settings persist to `UserDefaults`

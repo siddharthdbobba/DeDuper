@@ -44,6 +44,30 @@ struct PhotoItem: Identifiable {
         return CGFloat(pixelWidth) / CGFloat(pixelHeight)
     }
 
+    /// Best-effort on-disk size for "space freed" estimates: the real file size
+    /// when known, otherwise a rough heuristic from pixel dimensions.
+    var estimatedByteSize: Int64 {
+        fileByteSize ?? Int64(pixelWidth * pixelHeight * 3) / 20
+    }
+
+    /// Returns a copy forced into the protected state, used to overlay
+    /// album-level protection. Centralized here so adding a stored property to
+    /// `PhotoItem` can't silently drop it from the copy.
+    func markedProtected() -> PhotoItem {
+        PhotoItem(
+            id: id,
+            source: source,
+            creationDate: creationDate,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            mediaKind: mediaKind,
+            isFavorite: true,
+            burstIdentifier: burstIdentifier,
+            duration: duration,
+            fileByteSize: fileByteSize
+        )
+    }
+
     static func from(_ asset: PHAsset) -> PhotoItem {
         let kind: MediaKind
         switch asset.mediaType {

@@ -7,7 +7,7 @@ struct DoneView: View {
     @ObservedObject var viewModel: ReviewViewModel
 
     private var isHoldForReview: Bool {
-        UserDefaults.standard.bool(forKey: "holdForReview")
+        AppDefaults.holdForReview
     }
 
     var body: some View {

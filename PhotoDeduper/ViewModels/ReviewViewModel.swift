@@ -10,20 +10,14 @@ struct PhotoGroup: Identifiable {
     var proposedKeeperIndex: Int
     var scores: [Double]
     var qualities: [PhotoQuality]
-    var claudeExplanation: String?
-    /// On-device close-call resolution explanation (no Claude required).
+    /// On-device close-call resolution explanation (Vision-based, fully on-device).
     var localExplanation: String?
     var isCloseCall: Bool
     var keptIndices: Set<Int> = []
-    var aiReviews: [String: AIReviewResult] = [:]    // keyed by AIProvider.rawValue
-    var aiErrors: [String: String] = [:]             // keyed by AIProvider.rawValue
-    var reviewingProviders: Set<String> = []
 
     /// Origin label so the sidebar can hint whether a group came from a burst,
-    /// a time window, a cross-format duplicate, or a video match.
+    /// a time window, or a video match.
     var origin: GroupOrigin = .timeWindow
-
-    var isAIReviewing: Bool { !reviewingProviders.isEmpty }
 
     /// The lowest kept index; used for the sidebar thumbnail and lightbox status label.
     var primaryKeeperIndex: Int { keptIndices.min() ?? proposedKeeperIndex }
@@ -49,7 +43,6 @@ struct PhotoGroup: Identifiable {
 enum GroupOrigin: String {
     case timeWindow
     case burst
-    case crossFormat
     case video
 }
 
@@ -66,10 +59,8 @@ enum ScanPhase: String {
     case fetching       = "Fetching"
     case timeGrouping   = "Time grouping"
     case visualVerify   = "Visual verification"
-    case crossFormat    = "Cross-format pass"
     case videoMatching  = "Video matching"
     case scoring        = "Quality scoring"
-    case aiReview       = "AI review"
     case finalising     = "Finalising"
 }
 
@@ -81,7 +72,6 @@ final class ReviewViewModel: ObservableObject {
     @Published var selectedGroupID: UUID?
     @Published var scanState: ScanState = .idle
     @Published var showConfirmDelete = false
-    @Published var showSettings = false
     @Published var faceToFaceGroupID: UUID?
     @Published var lastReceipt: DeletionReceipt?
     @Published var undoBannerExpiresAt: Date?
@@ -104,6 +94,12 @@ final class ReviewViewModel: ObservableObject {
     /// Read from UserDefaults at scan time; favourited items are auto-protected.
     private var protectedAssetIDs: Set<String> = []
 
+    /// The security-scoped folder URL the current results came from (folder scans
+    /// only; nil for Photos-library scans). Retained so its access scope can be
+    /// re-opened when trashing the folder's files at delete time — child file URLs
+    /// carry no bookmark of their own.
+    private var scannedFolderURL: URL?
+
     /// Re-entry guard against double-delete. Set on entry to deleteGroup /
     /// confirmDelete and cleared on every exit path so a second rapid tap
     /// (e.g. double-tap on the delete button) can't kick off a concurrent
@@ -115,17 +111,21 @@ final class ReviewViewModel: ObservableObject {
     }
 
     var estimatedFreedBytes: Int64 {
-        groups.flatMap(\.itemsToDelete).reduce(Int64(0)) { total, item in
-            if let bytes = item.fileByteSize {
-                return total + bytes
-            }
-            return total + Int64(item.pixelWidth * item.pixelHeight * 3) / 20
-        }
+        groups.flatMap(\.itemsToDelete).reduce(Int64(0)) { $0 + $1.estimatedByteSize }
     }
 
     var hasActiveUndo: Bool {
         guard let expiry = undoBannerExpiresAt else { return false }
         return expiry > Date()
+    }
+
+    /// Platform-specific message shown when full-library Photos authorization is denied.
+    private var photosAccessDeniedMessage: String {
+#if os(macOS)
+        "Photo library access is required. Grant access in System Settings → Privacy & Security → Photos."
+#else
+        "Photo library access is required. Open Settings → Privacy → Photos and grant access."
+#endif
     }
 
     // MARK: - Entry points
@@ -138,18 +138,14 @@ final class ReviewViewModel: ObservableObject {
             let lib = PhotoLibraryManager()
             guard await lib.requestAuthorization() else {
                 if Task.isCancelled { return }
-#if os(macOS)
-                self.scanState = .error("Photo library access is required. Grant access in System Settings → Privacy & Security → Photos.")
-#else
-                self.scanState = .error("Photo library access is required. Open Settings → Privacy → Photos and grant access.")
-#endif
+                self.scanState = .error(self.photosAccessDeniedMessage)
                 return
             }
             if Task.isCancelled { return }
             await self.refreshProtectedAssetIDs(library: lib)
             self.publishScanState(progress: 0.05, message: "Fetching photos…", phase: .fetching)
 
-            let filter: PhotoLibraryManager.MediaFilter = UserDefaults.standard.bool(forKey: "scanVideosToo") ? .stillsAndVideos : .stillsOnly
+            let filter: PhotoLibraryManager.MediaFilter = AppDefaults.scanVideosToo ? .stillsAndVideos : .stillsOnly
             let items = await lib.fetchAllPhotos(filter: filter)
             if Task.isCancelled { return }
             await self.runPipeline(items)
@@ -164,18 +160,14 @@ final class ReviewViewModel: ObservableObject {
             let lib = PhotoLibraryManager()
             guard await lib.requestAuthorization() else {
                 if Task.isCancelled { return }
-#if os(macOS)
-                self.scanState = .error("Photo library access is required. Grant access in System Settings → Privacy & Security → Photos.")
-#else
-                self.scanState = .error("Photo library access is required. Open Settings → Privacy → Photos and grant access.")
-#endif
+                self.scanState = .error(self.photosAccessDeniedMessage)
                 return
             }
             if Task.isCancelled { return }
             await self.refreshProtectedAssetIDs(library: lib)
             self.publishScanState(progress: 0.05, message: "Loading \(album.title)…", phase: .fetching)
 
-            let filter: PhotoLibraryManager.MediaFilter = UserDefaults.standard.bool(forKey: "scanVideosToo") ? .stillsAndVideos : .stillsOnly
+            let filter: PhotoLibraryManager.MediaFilter = AppDefaults.scanVideosToo ? .stillsAndVideos : .stillsOnly
             let items = await lib.fetchPhotos(from: album.collection, filter: filter)
             if Task.isCancelled { return }
             await self.runPipeline(items)
@@ -246,12 +238,13 @@ final class ReviewViewModel: ObservableObject {
 
     func startFolderScan(url: URL) {
         cancelScan()
+        scannedFolderURL = url
         currentScanTask = Task { [weak self] in
             guard let self else { return }
             self.scanStartTime = Date()
             self.publishScanState(progress: 0.02, message: "Reading folder…", phase: .fetching)
             let lib = PhotoLibraryManager()
-            let filter: PhotoLibraryManager.MediaFilter = UserDefaults.standard.bool(forKey: "scanVideosToo") ? .stillsAndVideos : .stillsOnly
+            let filter: PhotoLibraryManager.MediaFilter = AppDefaults.scanVideosToo ? .stillsAndVideos : .stillsOnly
             let items = await lib.scanFolder(url, filter: filter)
             if Task.isCancelled { return }
             guard !items.isEmpty else {
@@ -267,6 +260,10 @@ final class ReviewViewModel: ObservableObject {
     func cancelScan() {
         currentScanTask?.cancel()
         currentScanTask = nil
+        // Cleared on every scan start (each entry point calls cancelScan first);
+        // startFolderScan re-sets it immediately after. Photos-library scans
+        // leave it nil so no folder scope is held when trashing assets.
+        scannedFolderURL = nil
         if case .scanning = scanState {
             scanState = .idle
             // Clear partially-scored clusters so a cancelled scan doesn't leave
@@ -287,10 +284,9 @@ final class ReviewViewModel: ObservableObject {
             return
         }
 
-        let timeWindow       = UserDefaults.standard.object(forKey: "timeWindow")        as? Double ?? 30
-        let hashThreshold    = UserDefaults.standard.object(forKey: "pHashThreshold")    as? Int    ?? 20
-        let closeCallFraction = (UserDefaults.standard.object(forKey: "closeCallThreshold") as? Double ?? 15) / 100.0
-        let crossFormatEnabled = UserDefaults.standard.bool(forKey: "crossFormatEnabled")
+        let timeWindow        = AppDefaults.timeWindow
+        let hashThreshold     = AppDefaults.pHashThreshold
+        let closeCallFraction = AppDefaults.closeCallThreshold / 100.0
 
         // Augment items with protected-album info before the pipeline starts.
         let augmented = applyProtectedFlags(items)
@@ -326,23 +322,7 @@ final class ReviewViewModel: ObservableObject {
 
         if Task.isCancelled { return }
 
-        // 3) Cross-format pass (HEIC ↔ JPG, scattered duplicates from sync issues).
-        var crossFormatGroups: [[PhotoItem]] = []
-        if crossFormatEnabled {
-            publishScanState(progress: 0.42, message: "Looking for cross-format duplicates…", phase: .crossFormat)
-            let alreadyGrouped = Set((verifiedBurst + verifiedTime).flatMap { $0 }.map(\.id))
-            crossFormatGroups = await grouper.findCrossFormatDuplicates(
-                among: stills,
-                excluding: alreadyGrouped,
-                threshold: max(5, hashThreshold - 3)
-            ) { [weak self] p in
-                Task { @MainActor [weak self] in
-                    self?.publishScanState(progress: 0.42 + p * 0.08, message: "Looking for cross-format duplicates…", phase: .crossFormat)
-                }
-            }
-        }
-
-        // 4) Video duplicate detection.
+        // 3) Video duplicate detection.
         var videoGroups: [[PhotoItem]] = []
         if !videos.isEmpty {
             publishScanState(progress: 0.52, message: "Matching videos…", phase: .videoMatching)
@@ -356,11 +336,10 @@ final class ReviewViewModel: ObservableObject {
         if Task.isCancelled { return }
         let allGroups = verifiedBurst.map { ($0, GroupOrigin.burst) }
             + verifiedTime.map { ($0, GroupOrigin.timeWindow) }
-            + crossFormatGroups.map { ($0, GroupOrigin.crossFormat) }
             + videoGroups.map { ($0, GroupOrigin.video) }
         guard !allGroups.isEmpty else { scanState = .reviewing; return }
 
-        // 5) Scoring. Stream results into `groups` as each cluster is scored so
+        // 4) Scoring. Stream results into `groups` as each cluster is scored so
         // the user sees groups appear progressively (the chunked-scan UX).
         let scorer = PhotoScorer()
         groups = []
@@ -375,7 +354,11 @@ final class ReviewViewModel: ObservableObject {
             // Promote any protected item to proposed keeper. Track whether a
             // promotion occurred — if it did, skip local close-call resolution
             // so a heuristic winner can't override the user's explicit signal.
-            let protectedIdx = group.firstIndex(where: { $0.isProtected })
+            // Indices of every protected item. The lowest doubles as the
+            // promotion target (matching the old `firstIndex`); the whole set is
+            // re-applied as keepers wherever `kept` is (re)built below.
+            let protectedKeepers = Set(group.indices.filter { group[$0].isProtected })
+            let protectedIdx = protectedKeepers.min()
             if let idx = protectedIdx { best = idx }
 
             var isCloseCall = false
@@ -389,7 +372,7 @@ final class ReviewViewModel: ObservableObject {
 
             // Mark all protected items as keepers; otherwise just the best.
             var kept: Set<Int> = [best]
-            for (idx, item) in group.enumerated() where item.isProtected { kept.insert(idx) }
+            kept.formUnion(protectedKeepers)
 
             // On-device close-call resolution — skipped when a protected item was
             // explicitly promoted, so its proposedKeeperIndex stays correct.
@@ -397,8 +380,9 @@ final class ReviewViewModel: ObservableObject {
             if isCloseCall && protectedIdx == nil {
                 if let (winnerIdx, reason) = resolveCloseCallLocally(qualities: qualities, ranked: sorted) {
                     best = winnerIdx
+                    // protectedIdx == nil here ⟹ protectedKeepers is empty, so
+                    // `best` is the sole keeper — nothing to re-union.
                     kept = [best]
-                    for (idx, item) in group.enumerated() where item.isProtected { kept.insert(idx) }
                     localExplanation = reason
                 }
             }
@@ -422,52 +406,13 @@ final class ReviewViewModel: ObservableObject {
             groups.append(photoGroup)
             if selectedGroupID == nil { selectedGroupID = photoGroup.id }
 
-            // Scoring spans 0.65–0.87, safely after video matching's max of 0.62.
+            // Scoring spans 0.65–0.97, safely after video matching's max of 0.62.
             // (The old 0.60 start overlapped with video's [0.52, 0.62] range,
             // causing momentary backwards progress that corrupted ETA velocity.)
-            let p = 0.65 + Double(i + 1) / Double(allGroups.count) * 0.22
+            // Scoring is the last real work phase, so it runs right up to the
+            // 0.98 finalising step — no end-of-scan jump.
+            let p = 0.65 + Double(i + 1) / Double(allGroups.count) * 0.32
             publishScanState(progress: p, message: "Scoring quality (\(i + 1)/\(allGroups.count))…", phase: .scoring)
-        }
-
-        if Task.isCancelled { return }
-
-        // 6) AI close-call review via bundled proxy (GPT-4.1 mini).
-        // Runs automatically when the user has premium and auto-review is enabled,
-        // and the on-device resolver couldn't settle the call.
-        // On HTTP 429 the group silently keeps its on-device result.
-        let autoReviewEnabled = UserDefaults.standard.bool(forKey: "autoReviewEnabled")
-        let hasPremium = EntitlementStore.shared.hasPremium
-        let closeCallIndices = groups.indices.filter { groups[$0].isCloseCall && groups[$0].localExplanation == nil }
-        if !closeCallIndices.isEmpty && autoReviewEnabled && hasPremium {
-            let cap = 50
-            let capped = Array(closeCallIndices.prefix(cap))
-            let msg = capped.count < closeCallIndices.count
-                ? "Asking AI about \(capped.count) of \(closeCallIndices.count) close calls (capped at \(cap))…"
-                : "Asking AI about \(capped.count) close call(s)…"
-            publishScanState(progress: 0.88, message: msg, phase: .aiReview)
-            let reviewer = ProxyReviewer()
-            await withTaskGroup(of: (Int, AIReviewResult?).self) { taskGroup in
-                for idx in capped {
-                    let items  = groups[idx].items
-                    let scores = groups[idx].scores
-                    taskGroup.addTask {
-                        let result = try? await reviewer.review(items: items, scores: scores)
-                        return (idx, result)
-                    }
-                }
-                for await (idx, result) in taskGroup {
-                    if Task.isCancelled { break }
-                    guard let result, idx < groups.count else { continue }
-                    // Surface the AI result as a suggestion the same way the
-                    // on-demand requestAIReview path does — record it into
-                    // aiReviews (keyed by provider) and clear any stale error /
-                    // in-flight marker. The user accepts it via the existing
-                    // Accept-AI-suggestion UI; we do NOT auto-apply the keeper.
-                    groups[idx].aiReviews[result.provider.rawValue] = result
-                    groups[idx].aiErrors.removeValue(forKey: result.provider.rawValue)
-                    groups[idx].reviewingProviders.remove(result.provider.rawValue)
-                }
-            }
         }
 
         if Task.isCancelled { return }
@@ -481,9 +426,9 @@ final class ReviewViewModel: ObservableObject {
 
     /// Indices that must always remain keepers in a group, regardless of which
     /// photo is chosen: protected items (favorites) and undecodable items (whose
-    /// pixels couldn't be assessed — never auto-delete). `acceptAISuggestion` and
-    /// `selectKeeper` rebuild keptIndices from scratch and must re-apply these,
-    /// otherwise an undecodable item silently falls into the deletion set.
+    /// pixels couldn't be assessed — never auto-delete). `selectKeeper` rebuilds
+    /// keptIndices from scratch and must re-apply these, otherwise an undecodable
+    /// item silently falls into the deletion set.
     private func mandatoryKeepers(in group: PhotoGroup) -> Set<Int> {
         var indices = Set<Int>()
         for (idx, item) in group.items.enumerated() where item.isProtected { indices.insert(idx) }
@@ -506,81 +451,6 @@ final class ReviewViewModel: ObservableObject {
         }
     }
 
-    func requestAIReview(groupID: UUID, provider: AIProvider) async {
-        guard let idx = groups.firstIndex(where: { $0.id == groupID }) else { return }
-        groups[idx].reviewingProviders.insert(provider.rawValue)
-
-        let items  = groups[idx].items
-        let scores = groups[idx].scores
-
-        do {
-            let result: AIReviewResult
-            switch provider {
-            case .claude:  result = try await ClaudeReviewer().review(items: items, scores: scores)
-            case .openai:  result = try await OpenAIReviewer().review(items: items, scores: scores)
-            case .groq:    result = try await GroqReviewer().review(items: items, scores: scores)
-            case .proxy:   result = try await ProxyReviewer().review(items: items, scores: scores)
-            }
-            guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
-            groups[i].aiReviews[provider.rawValue] = result
-            groups[i].aiErrors.removeValue(forKey: provider.rawValue)
-            groups[i].reviewingProviders.remove(provider.rawValue)
-        } catch {
-            guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
-            // URLError's localizedDescription ("Could not connect to the server.") is too
-            // generic. Map the most common codes to actionable messages; fall through to
-            // localizedDescription for ReviewerError and any other typed errors.
-            let message: String
-            if let urlErr = error as? URLError {
-                switch urlErr.code {
-                case .notConnectedToInternet, .networkConnectionLost:
-                    message = "No internet connection. Check your network and try again."
-                case .timedOut:
-                    message = "Request timed out — the server took too long to respond."
-                case .cannotConnectToHost, .cannotFindHost:
-                    message = "Could not reach the review server. Try again later."
-                default:
-                    message = "Network error: \(urlErr.localizedDescription)"
-                }
-            } else {
-                message = error.localizedDescription
-            }
-            groups[i].aiErrors[provider.rawValue] = message
-            groups[i].reviewingProviders.remove(provider.rawValue)
-        }
-    }
-
-    func requestAIReviewForAllGroups(provider: AIProvider) async {
-        let groupIDs = groups.map(\.id)
-        guard !groupIDs.isEmpty else { return }
-        let maxConcurrent = 4
-
-        await withTaskGroup(of: Void.self) { taskGroup in
-            var idx = 0
-            for _ in 0..<min(maxConcurrent, groupIDs.count) {
-                let id = groupIDs[idx]; idx += 1
-                taskGroup.addTask { [weak self] in
-                    await self?.requestAIReview(groupID: id, provider: provider)
-                }
-            }
-            while await taskGroup.next() != nil {
-                guard idx < groupIDs.count else { continue }
-                let id = groupIDs[idx]; idx += 1
-                taskGroup.addTask { [weak self] in
-                    await self?.requestAIReview(groupID: id, provider: provider)
-                }
-            }
-        }
-    }
-
-    func acceptAISuggestion(groupID: UUID, provider: AIProvider) {
-        guard let i = groups.firstIndex(where: { $0.id == groupID }),
-              let result = groups[i].aiReviews[provider.rawValue] else { return }
-        var kept: Set<Int> = [result.winnerIndex]
-        kept.formUnion(mandatoryKeepers(in: groups[i]))
-        groups[i].keptIndices = kept
-    }
-
     func selectKeeper(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
         var kept: Set<Int> = [itemIndex]
@@ -588,18 +458,21 @@ final class ReviewViewModel: ObservableObject {
         groups[i].keptIndices = kept
     }
 
-    func selectNextGroup() {
-        guard let id = selectedGroupID,
-              let idx = groups.firstIndex(where: { $0.id == id }),
-              idx + 1 < groups.count else { return }
-        selectedGroupID = groups[idx + 1].id
-    }
+    func selectNextGroup()     { selectGroup(offset: 1) }
+    func selectPreviousGroup() { selectGroup(offset: -1) }
 
-    func selectPreviousGroup() {
+    private func selectGroup(offset: Int) {
         guard let id = selectedGroupID,
-              let idx = groups.firstIndex(where: { $0.id == id }),
-              idx > 0 else { return }
-        selectedGroupID = groups[idx - 1].id
+              let idx = groups.firstIndex(where: { $0.id == id }) else { return }
+        let target = idx + offset
+        guard groups.indices.contains(target) else { return }
+        // Defer the @Published mutation: onKeyPress handlers can fire while
+        // SwiftUI is mid view-update, and a synchronous assignment here trips
+        // "Publishing changes from within view updates".
+        let nextID = groups[target].id
+        DispatchQueue.main.async { [weak self] in
+            self?.selectedGroupID = nextID
+        }
     }
 
     func deleteGroup(groupID: UUID) async {
@@ -613,12 +486,12 @@ final class ReviewViewModel: ObservableObject {
         guard let idx = groups.firstIndex(where: { $0.id == groupID }) else { isDeleting = false; return }
         let toDelete = groups[idx].itemsToDelete
         let groupSnapshot = groups[idx]  // capture before await; groups may mutate during suspension
-        let mode: DeletionMode = UserDefaults.standard.bool(forKey: "holdForReview") ? .holdForReview : .directDelete
+        let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
 
         let receipt: DeletionReceipt?
         do {
             if !toDelete.isEmpty {
-                receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode)
+                receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
             } else {
                 receipt = nil
             }
@@ -638,8 +511,8 @@ final class ReviewViewModel: ObservableObject {
         // properties in that window trips "Publishing changes from within
         // view updates". Reassign selection BEFORE removing the group so the
         // sidebar List's two-way binding never observes a missing selected ID.
-        if let receipt {
-            logDeletions(toDelete, in: groupSnapshot, receipt: receipt)
+        if receipt != nil {
+            logDeletions(toDelete, in: groupSnapshot)
         }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -679,10 +552,10 @@ final class ReviewViewModel: ObservableObject {
         let deletedCount = toDelete.count
         let freed = estimatedFreedBytes
         let keptCount = groups.reduce(0) { $0 + $1.keptIndices.count }
-        let mode: DeletionMode = UserDefaults.standard.bool(forKey: "holdForReview") ? .holdForReview : .directDelete
+        let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
 
         do {
-            let receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode)
+            let receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
             // Only show the undo banner when assets were actually trashed.
             // In holdForReview mode trashedAssetIDs is empty — the banner would
             // be misleading (nothing is in Recently Deleted to recover).
@@ -691,7 +564,7 @@ final class ReviewViewModel: ObservableObject {
                 self.scheduleUndoExpiry(seconds: 30)
             }
             for (group, items) in toDeleteByGroup where !items.isEmpty {
-                logDeletions(items, in: group, receipt: receipt)
+                logDeletions(items, in: group)
             }
             scanState = .done(keptCount: keptCount, deletedCount: deletedCount, freedBytes: freed)
         } catch {
@@ -831,7 +704,7 @@ final class ReviewViewModel: ObservableObject {
 
     /// Refreshes the protected-asset set from UserDefaults.
     private func refreshProtectedAssetIDs(library: PhotoLibraryManager) async {
-        let albumIDs = UserDefaults.standard.array(forKey: "protectedAlbumIDs") as? [String] ?? []
+        let albumIDs = AppDefaults.protectedAlbumIDs
         guard !albumIDs.isEmpty else { protectedAssetIDs = []; return }
         let collections = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: albumIDs, options: nil)
         var found: [PHAssetCollection] = []
@@ -846,18 +719,7 @@ final class ReviewViewModel: ObservableObject {
         guard !protectedAssetIDs.isEmpty else { return items }
         return items.map { item in
             if !item.isProtected, protectedAssetIDs.contains(item.id) {
-                return PhotoItem(
-                    id: item.id,
-                    source: item.source,
-                    creationDate: item.creationDate,
-                    pixelWidth: item.pixelWidth,
-                    pixelHeight: item.pixelHeight,
-                    mediaKind: item.mediaKind,
-                    isFavorite: true,           // force-protected
-                    burstIdentifier: item.burstIdentifier,
-                    duration: item.duration,
-                    fileByteSize: item.fileByteSize
-                )
+                return item.markedProtected()
             }
             return item
         }
@@ -865,29 +727,19 @@ final class ReviewViewModel: ObservableObject {
 
     // MARK: - Audit logging
 
-    private func logDeletions(_ items: [PhotoItem], in group: PhotoGroup, receipt: DeletionReceipt) {
-        // Attribute an AI provider/reason only when the kept photo is actually
-        // the AI's suggested winner — auto-review surfaces a suggestion without
-        // applying it, so otherwise the logged reason would describe a photo that
-        // wasn't kept. Falls back to the on-device explanation.
-        let aiProvider = group.aiReviews.keys.sorted().first { key in
-            guard let review = group.aiReviews[key] else { return false }
-            return group.keptIndices.contains(review.winnerIndex)
-        }
-        let aiReason: String? = aiProvider
-            .flatMap { group.aiReviews[$0] }
-            .map(\.reason)
-            ?? group.localExplanation
+    private func logDeletions(_ items: [PhotoItem], in group: PhotoGroup) {
+        // Record the on-device close-call explanation (if any) as the reason the
+        // keeper was chosen.
+        let reason: String? = group.localExplanation
         let entries = items.map { item in
             AuditEntry(
                 id: UUID(),
                 timestamp: Date(),
                 photoID: item.id,
                 filename: nil,
-                estimatedBytes: item.fileByteSize ?? Int64(item.pixelWidth * item.pixelHeight * 3) / 20,
+                estimatedBytes: item.estimatedByteSize,
                 groupSize: group.items.count,
-                aiProvider: aiProvider,
-                aiReason: aiReason,
+                reason: reason,
                 restored: false
             )
         }

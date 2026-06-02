@@ -2,6 +2,19 @@ import SwiftUI
 import Photos
 import ImageIO
 
+/// Coordinate space shared between the lightbox's outside-photo tap gesture and
+/// the photo's reported frame, so the two are measured against the same origin.
+private let lightboxSpaceName = "PhotoLightboxView.space"
+
+/// Carries the displayed photo's on-screen frame up from `FullSizePhotoView` to
+/// `PhotoLightboxView`, which uses it to ignore taps that land on the photo.
+private struct LightboxImageRectKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
 struct PhotoLightboxView: View {
     let group: PhotoGroup
     @State var currentIndex: Int
@@ -12,22 +25,18 @@ struct PhotoLightboxView: View {
     @FocusState private var isFocused: Bool
     @StateObject private var imageCache = LightboxImageCache()
     @State private var showInfo: Bool = false
+    /// The on-screen frame of the currently displayed photo (in the lightbox
+    /// coordinate space), reported by `FullSizePhotoView`. Taps outside this rect
+    /// dismiss the lightbox.
+    @State private var imageRect: CGRect = .zero
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            // Backdrop — tapping anywhere on the black area dismisses (or closes
-            // the info panel if it's open).
+            // Visual backdrop only. Dismiss-on-click is handled by the
+            // `outsidePhotoTapGesture` on the outer ZStack below — a tap gesture
+            // here can't work because `imageArea` is framed to fill this region and
+            // acts as a hit-test wall, so margin clicks never fall through to it.
             Color.black.ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if showInfo {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                            showInfo = false
-                        }
-                    } else {
-                        dismiss()
-                    }
-                }
 
             VStack(spacing: 0) {
                 topBar
@@ -50,9 +59,19 @@ struct PhotoLightboxView: View {
 #else
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 #endif
+        .coordinateSpace(name: lightboxSpaceName)
+        // Click anywhere outside the photo to return to the group. Attached to the
+        // outer container (not the backdrop), so it fires regardless of the
+        // hit-test wall created by the fill-framed image area. The buttons, dots,
+        // and the photo itself take precedence: their own gestures consume the tap,
+        // and the location check below ignores anything inside the photo's bounds.
+        .gesture(outsidePhotoTapGesture)
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
+        .onPreferenceChange(LightboxImageRectKey.self) { rect in
+            imageRect = rect
+        }
         .onAppear {
             isFocused = true
             prefetchNeighbors()
@@ -81,17 +100,37 @@ struct PhotoLightboxView: View {
             return .handled
         }
         .onKeyPress(.escape) {
-            if showInfo {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { showInfo = false }
-                return .handled
-            }
-            dismiss()
+            dismissOrCloseInfo()
             return .handled
         }
     }
 
+    /// Closes the info panel if it's open; otherwise dismisses the lightbox and
+    /// returns to the group. Shared by the backdrop click and the Escape key.
+    private func dismissOrCloseInfo() {
+        if showInfo {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                showInfo = false
+            }
+        } else {
+            dismiss()
+        }
+    }
+
+    /// A tap landing anywhere outside the photo returns to the group. Lives on the
+    /// outer container so it isn't blocked by the fill-framed image area; the photo,
+    /// buttons, and dots have their own gestures that take precedence, and the
+    /// `imageRect` check guards against dismissing on a tap that lands on the photo.
+    private var outsidePhotoTapGesture: some Gesture {
+        SpatialTapGesture(coordinateSpace: .named(lightboxSpaceName))
+            .onEnded { value in
+                guard !imageRect.contains(value.location) else { return }
+                dismissOrCloseInfo()
+            }
+    }
+
     /// Drag-up reveals the info panel; drag-down dismisses it. minimumDistance is
-    /// large enough that taps still register on the backdrop's tap gesture.
+    /// large enough that taps still register on the outside-photo tap gesture.
     private var infoSwipeGesture: some Gesture {
         DragGesture(minimumDistance: 30)
             .onEnded { value in
@@ -282,7 +321,17 @@ final class LightboxImageCache: ObservableObject {
     private func loadFromSource(_ item: PhotoItem) async -> PlatformImage? {
         switch item.source {
         case .asset(let asset): return await loadAsset(asset)
-        case .fileURL(let url): return await loadFile(url)
+        case .fileURL(let url):
+            // Videos have no still original: PlatformImage(contentsOfFile:) returns
+            // nil for .mov/.mp4, which would leave the lightbox spinning forever.
+            // Decode a keyframe instead — the same path the review grid uses.
+            if item.isVideo {
+                guard let cg = await PhotoLibraryManager.loadThumbnail(
+                    for: item, size: CGSize(width: 3840, height: 3840)
+                ) else { return nil }
+                return PlatformImage.from(cgImage: cg)
+            }
+            return await loadFile(url)
         }
     }
 
@@ -670,10 +719,17 @@ struct FullSizePhotoView: View {
                 Image(platformImage: image)
                     .resizable()
                     .scaledToFit()
-                    // Absorb taps that land on the image itself; the surrounding
-                    // black area still dismisses via the backdrop's tap gesture.
-                    .contentShape(Rectangle())
-                    .onTapGesture { }
+                    // Publish the photo's on-screen frame so the lightbox can tell
+                    // a tap on the photo from a tap on the surrounding black area
+                    // (which dismisses). Measured in the shared lightbox space.
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: LightboxImageRectKey.self,
+                                value: geo.frame(in: .named(lightboxSpaceName))
+                            )
+                        }
+                    )
             } else {
                 VStack(spacing: 12) {
                     ProgressView().tint(.white)

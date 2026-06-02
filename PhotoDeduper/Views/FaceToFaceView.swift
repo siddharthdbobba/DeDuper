@@ -7,8 +7,16 @@ import Photos
 struct FaceToFaceView: View {
     let group: PhotoGroup
     let onAccept: (Int) -> Void
+    /// Closes the comparison. Supplied by the presenter (ReviewView), which now
+    /// hosts this view as an in-window overlay rather than a sheet — so there is
+    /// no `@Environment(\.dismiss)` to call; the presenter clears its own state.
+    let onClose: () -> Void
+    /// Whether the comparison fills its host window edge-to-edge. Owned by the
+    /// presenter (ReviewView) so it can drop the card's inset/rounding; toggled
+    /// by the expand button here. This is an in-app "full screen" — it never
+    /// touches the app window, so the rest of the app stays put.
+    @Binding var isMaximized: Bool
 
-    @Environment(\.dismiss) private var dismiss
     @State private var leftIndex: Int
     @State private var rightIndex: Int
 
@@ -28,9 +36,11 @@ struct FaceToFaceView: View {
     @StateObject private var imageCache = LightboxImageCache()
     @FocusState private var isFocused: Bool
 
-    init(group: PhotoGroup, onAccept: @escaping (Int) -> Void) {
+    init(group: PhotoGroup, onAccept: @escaping (Int) -> Void, onClose: @escaping () -> Void, isMaximized: Binding<Bool>) {
         self.group = group
         self.onAccept = onAccept
+        self.onClose = onClose
+        _isMaximized = isMaximized
         // Default to top two by score; fall back to distinct indices when possible.
         let ranked = group.scores.indices.sorted { group.scores[$0] > group.scores[$1] }
         let first  = ranked.first ?? 0
@@ -107,7 +117,9 @@ struct FaceToFaceView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            // No .ignoresSafeArea(): the presenter clips this into a rounded card
+            // over a dimmed backdrop, so the black fill must stay within bounds.
+            Color.black
 
             VStack(spacing: 0) {
                 topBar
@@ -115,12 +127,7 @@ struct FaceToFaceView: View {
                 bottomBar
             }
         }
-#if os(macOS)
-        .frame(minWidth: 880, idealWidth: 1200, maxWidth: .infinity,
-               minHeight: 600, idealHeight: 800, maxHeight: .infinity)
-#else
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-#endif
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
@@ -128,26 +135,27 @@ struct FaceToFaceView: View {
         .onKeyPress { press in
             guard press.modifiers.isEmpty else { return .ignored }
             switch press.characters {
-            case "1": onAccept(leftIndex); dismiss(); return .handled
-            case "2": onAccept(rightIndex); dismiss(); return .handled
+            case "1": onAccept(leftIndex); onClose(); return .handled
+            case "2": onAccept(rightIndex); onClose(); return .handled
             case "0": resetView(); return .handled
             case "+", "=": zoomIn(); return .handled
             case "-", "_": zoomOut(); return .handled
             default: return .ignored
             }
         }
-        .onKeyPress(.leftArrow)  { cycle(side: .left,  by: -1); return .handled }
-        .onKeyPress(.rightArrow) { cycle(side: .left,  by: +1); return .handled }
-        .onKeyPress(.upArrow)    { cycle(side: .right, by: -1); return .handled }
-        .onKeyPress(.downArrow)  { cycle(side: .right, by: +1); return .handled }
-        .onKeyPress(.escape)     { dismiss(); return .handled }
+        // ← → drive the RIGHT pane; ↑ ↓ drive the LEFT pane (per user preference).
+        .onKeyPress(.leftArrow)  { cycle(side: .right, by: -1); return .handled }
+        .onKeyPress(.rightArrow) { cycle(side: .right, by: +1); return .handled }
+        .onKeyPress(.upArrow)    { cycle(side: .left,  by: -1); return .handled }
+        .onKeyPress(.downArrow)  { cycle(side: .left,  by: +1); return .handled }
+        .onKeyPress(.escape)     { onClose(); return .handled }
     }
 
     // MARK: - Top bar
 
     private var topBar: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { onClose() } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title2)
                     .symbolRenderingMode(.hierarchical)
@@ -197,16 +205,20 @@ struct FaceToFaceView: View {
                 .disabled(zoom == 1.0 && pan == .zero)
 
 #if os(macOS)
-                // Full-screen toggle: puts the host window (and therefore this
-                // sheet) into macOS full-screen mode so photos fill the display.
+                // Expand the comparison to fill the window edge-to-edge. This is
+                // an in-app toggle only — it makes NO window/NSApp calls, so it
+                // never drags the whole app into macOS full-screen (the behavior
+                // the user rejected); only the comparison grows.
                 Button {
-                    NSApplication.shared.keyWindow?.toggleFullScreen(nil)
+                    withAnimation(.easeInOut(duration: 0.2)) { isMaximized.toggle() }
                 } label: {
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    Image(systemName: isMaximized
+                          ? "arrow.down.right.and.arrow.up.left"
+                          : "arrow.up.left.and.arrow.down.right")
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .help("Toggle full screen (⌃⌘F)")
+                .help(isMaximized ? "Restore" : "Fill the window")
 #endif
             }
         }
@@ -219,17 +231,16 @@ struct FaceToFaceView: View {
     private var comparisonPane: some View {
         GeometryReader { geo in
             HStack(spacing: 2) {
-                pane(index: leftIndex,  label: "1", containerSize: geo.size)
-                pane(index: rightIndex, label: "2", containerSize: geo.size)
+                pane(index: leftIndex,  side: .left,  containerSize: geo.size)
+                pane(index: rightIndex, side: .right, containerSize: geo.size)
             }
             .background(.black)
             // Track container size so clampedPan stays accurate on window resize.
             .task(id: geo.size) { containerSize = geo.size }
 #if os(macOS)
-            // Transparent overlay that captures trackpad two-finger scroll events
-            // and forwards them as pan deltas. SwiftUI's DragGesture only handles
-            // mouse click-drag; trackpad swipe generates scrollWheel AppKit events
-            // which this NSView intercepts.
+            // Captures trackpad two-finger scroll as pan deltas (SwiftUI's
+            // DragGesture only handles click-drag). Click-through, so it never
+            // blocks taps on the buttons below — see TrackpadScrollCapture.
             .overlay(
                 TrackpadScrollCapture { delta in
                     pan = clampedPan(
@@ -242,8 +253,8 @@ struct FaceToFaceView: View {
         }
     }
 
-    private func pane(index: Int, label: String, containerSize: CGSize) -> some View {
-        // Clamp stale indices defensively (group can be mutated by a parallel AI review).
+    private func pane(index: Int, side: Side, containerSize: CGSize) -> some View {
+        // Clamp stale indices defensively (group can be mutated by a parallel close-call resolution pass).
         let safeIndex = max(0, min(index, group.items.count - 1))
 
         return ZStack(alignment: .topLeading) {
@@ -255,15 +266,16 @@ struct FaceToFaceView: View {
                 pan: effectivePan
             )
 
-            // Label bubble + score
+            // Photo number (matches the header) + keeper/protected badges + score.
+            // Display-only — navigation now lives in the on-photo edge arrows below.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    Text(label)
-                        .font(.title3.bold())
-                        .frame(width: 28, height: 28)
-                        .background(.white)
+                    Text("\(safeIndex + 1)")
+                        .font(.title3.bold().monospacedDigit())
+                        .frame(width: 30, height: 30)
+                        .background(.white, in: Circle())
                         .foregroundStyle(.black)
-                        .clipShape(Circle())
+
                     if group.keptIndices.contains(safeIndex) {
                         Label("Current keeper", systemImage: "checkmark.circle.fill")
                             .font(.caption.bold())
@@ -290,6 +302,17 @@ struct FaceToFaceView: View {
             .padding(12)
             .allowsHitTesting(false)
 
+            // On-photo navigation — tappable prev / next arrows on each edge.
+            // Clicking changes THIS pane's photo (skipping the one the other pane
+            // shows). Available alongside the keyboard arrows; works on touch too.
+            HStack {
+                edgeArrow("chevron.left")  { cycle(side: side, by: -1) }
+                Spacer()
+                edgeArrow("chevron.right") { cycle(side: side, by: +1) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 10)
+
             // Accept button — bottom trailing
             VStack {
                 Spacer()
@@ -297,9 +320,9 @@ struct FaceToFaceView: View {
                     Spacer()
                     Button {
                         onAccept(safeIndex)
-                        dismiss()
+                        onClose()
                     } label: {
-                        Label("Keep this one (\(label))", systemImage: "checkmark.circle")
+                        Label("Keep \(side == .left ? "Left" : "Right")", systemImage: "checkmark.circle")
                             .font(.subheadline.bold())
                             .padding(.horizontal, 14).padding(.vertical, 8)
                             .background(.green)
@@ -318,6 +341,26 @@ struct FaceToFaceView: View {
         // Drag and pinch recognised simultaneously so two-finger pan + pinch
         // work together without one gesture cancelling the other.
         .gesture(panGesture.simultaneously(with: magnificationGesture))
+    }
+
+    /// Large, semi-transparent chevron button overlaid on a photo's left/right
+    /// edge. Tapping it changes THIS pane's photo (prev / next via `cycle(side:by:)`,
+    /// which skips whatever the other pane shows). Gives on-photo mouse/touch
+    /// navigation alongside the keyboard arrows; works on iPhone too. Kept out of
+    /// the focus ring so it never hijacks the arrow keys for focus traversal.
+    private func edgeArrow(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.black.opacity(0.45), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .disabled(group.items.count < 2)
+        .help("Previous / next photo on this side")
     }
 
     // MARK: - Gestures
@@ -404,7 +447,7 @@ struct FaceToFaceView: View {
 
     private var bottomBar: some View {
         HStack {
-            Text("**1** keep left · **2** keep right · **← →** cycle left · **↑ ↓** cycle right · **+/−** zoom · **0** reset · **Esc** close")
+            Text("**1** keep left · **2** keep right · **↑ ↓** cycle left · **← →** cycle right · **+/−** zoom · **0** reset · **Esc** close")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.6))
             Spacer()
@@ -456,54 +499,69 @@ private struct SyncedPhotoView: View {
 #if os(macOS)
 import AppKit
 
-/// Transparent NSView overlay that forwards trackpad two-finger swipe events
-/// to SwiftUI as pan deltas.
+/// Captures trackpad two-finger swipe (`scrollWheel`) events and forwards them as
+/// pan deltas — WITHOUT blocking mouse clicks.
 ///
-/// SwiftUI's DragGesture only handles mouse click-drag; trackpad two-finger
-/// swipe generates `scrollWheel` AppKit events. This thin wrapper intercepts
-/// those events without blocking any SwiftUI gestures (drag / pinch travel
-/// through separate AppKit event channels).
+/// The previous version was a plain overlay `NSView`. Sitting on top of the panes
+/// and not overriding `hitTest`, it became the hit-test target for every mouse
+/// click, so the SwiftUI buttons beneath it (edge arrows, Keep) never fired. Here
+/// the `NSView` is fully click-through (`hitTest` → nil) and scroll is captured by
+/// a local `NSEvent` monitor, which doesn't rely on being the hit-test target. The
+/// monitor is torn down with the view and only lives while the comparison is on
+/// screen (which is modal), so consuming scroll app-wide is safe.
 ///
-/// Delta sign convention (matches "natural scrolling" where content follows
-/// fingers):
-///   • Swipe RIGHT  → positive x  → pan.width  increases → image moves right
-///   • Swipe DOWN   → negative y  → pan.height decreases → image moves up
-///     (trackpad scrollingDeltaY is positive for "scroll up" in AppKit terms,
-///      i.e. content should appear to move DOWN, so we negate to get the image
-///      moving in the same direction as the fingers.)
+/// Delta sign: traditional scroll mapping — scrolling DOWN shifts the image UP. With
+/// natural scrolling `scrollingDeltaY` is negative on a downward swipe, so it's
+/// passed through un-negated.
 private struct TrackpadScrollCapture: NSViewRepresentable {
     var onScroll: (CGPoint) -> Void
 
-    func makeNSView(context: Context) -> ScrollCaptureView {
-        let v = ScrollCaptureView()
-        v.onScroll = onScroll
-        return v
+    func makeCoordinator() -> Coordinator { Coordinator(onScroll: onScroll) }
+
+    func makeNSView(context: Context) -> NSView {
+        context.coordinator.onScroll = onScroll
+        context.coordinator.startMonitoring()
+        return PassthroughView()
     }
 
-    func updateNSView(_ nsView: ScrollCaptureView, context: Context) {
-        nsView.onScroll = onScroll
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onScroll = onScroll
     }
 
-    final class ScrollCaptureView: NSView {
-        var onScroll: ((CGPoint) -> Void)?
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stopMonitoring()
+    }
 
-        override func scrollWheel(with event: NSEvent) {
-            // Only precise (trackpad) events — ignore mouse wheel steps.
-            guard event.hasPreciseScrollingDeltas else {
-                super.scrollWheel(with: event)
-                return
+    final class Coordinator {
+        var onScroll: (CGPoint) -> Void
+        private var monitor: Any?
+
+        init(onScroll: @escaping (CGPoint) -> Void) { self.onScroll = onScroll }
+
+        func startMonitoring() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self else { return event }
+                // Only precise (trackpad) events; ignore momentum so panning stops
+                // cleanly when fingers lift rather than coasting.
+                guard event.hasPreciseScrollingDeltas, event.momentumPhase.rawValue == 0 else {
+                    return event
+                }
+                self.onScroll(CGPoint(x: event.scrollingDeltaX, y: event.scrollingDeltaY))
+                return nil   // consume so the group list behind the overlay doesn't scroll
             }
-            // Ignore momentum (finger-off deceleration) so panning stops
-            // cleanly when fingers lift rather than coasting unpredictably.
-            guard event.momentumPhase.rawValue == 0 else { return }
-
-            // scrollingDeltaY > 0 means AppKit "scroll up" (show content above)
-            // which translates to moving the image DOWN — so negate Y.
-            onScroll?(CGPoint(
-                x:  event.scrollingDeltaX,
-                y: -event.scrollingDeltaY
-            ))
         }
+
+        func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+    }
+
+    /// Click-through `NSView`: never the hit-test target, so every mouse click
+    /// reaches the SwiftUI controls beneath. Scroll is handled by the monitor.
+    final class PassthroughView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 #endif

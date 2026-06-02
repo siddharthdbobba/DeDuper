@@ -4,10 +4,12 @@ import Photos
 struct ReviewView: View {
     @ObservedObject var viewModel: ReviewViewModel
     @FocusState private var isFocused: Bool
-    @State private var showPaywall = false
     /// Set to a group ID when the `d` shortcut is pressed; drives the per-group
     /// confirmation dialog so accidental keypresses don't immediately delete.
     @State private var confirmDeleteGroupID: UUID?
+    /// Whether the Face-to-Face overlay fills the window edge-to-edge — its own
+    /// in-app "full screen", distinct from the app window's native full-screen.
+    @State private var faceToFaceMaximized = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -26,18 +28,12 @@ struct ReviewView: View {
                     }
                     .help("Return to Home")
                 }
-                ToolbarItem(placement: .automatic) {
-                    reviewAllButton
-                }
                 ToolbarItem(placement: .primaryAction) {
                     deleteButton
                 }
             }
             .sheet(isPresented: $viewModel.showConfirmDelete) {
                 ConfirmDeleteSheet(viewModel: viewModel)
-            }
-            .sheet(isPresented: $showPaywall) {
-                PaywallView()
             }
             .confirmationDialog(
                 {
@@ -108,8 +104,54 @@ struct ReviewView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .padding(.bottom, 16)
             }
+
+            // Face-to-Face comparison — hosted at the window root (not as a sheet)
+            // so it can toggle native full-screen and be dismissed by clicking the
+            // dimmed backdrop. Shown whenever viewModel.faceToFaceGroupID is set.
+            faceToFaceOverlay
         }
         .animation(.easeOut(duration: 0.25), value: viewModel.hasActiveUndo)
+    }
+
+    // MARK: - Face-to-Face overlay
+
+    @ViewBuilder
+    private var faceToFaceOverlay: some View {
+        if let id = viewModel.faceToFaceGroupID,
+           let group = viewModel.groups.first(where: { $0.id == id }) {
+            ZStack {
+                // Dimmed, tappable backdrop — click anywhere outside the card to
+                // close (the "click out of face-to-face mode" request).
+                Color.black.opacity(0.55)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeFaceToFace() }
+
+                FaceToFaceView(
+                    group: group,
+                    onAccept: { winner in
+                        viewModel.selectKeeper(groupID: group.id, itemIndex: winner)
+                    },
+                    onClose: { closeFaceToFace() },
+                    isMaximized: $faceToFaceMaximized
+                )
+                // Maximized = fill the window edge-to-edge (drop the inset, the
+                // rounded corners, and the shadow). Windowed = inset card with a
+                // clickable backdrop margin.
+                .clipShape(RoundedRectangle(cornerRadius: faceToFaceMaximized ? 0 : 14))
+                .shadow(color: .black.opacity(faceToFaceMaximized ? 0 : 0.5), radius: 30)
+                .padding(faceToFaceMaximized ? 0 : 24)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// Closes the comparison overlay and returns keyboard focus to ReviewView so
+    /// the j/k/arrow group navigation keeps working afterwards.
+    private func closeFaceToFace() {
+        viewModel.faceToFaceGroupID = nil
+        faceToFaceMaximized = false   // next open starts windowed, not maximized
+        isFocused = true
     }
 
     // MARK: - Sidebar
@@ -177,63 +219,6 @@ struct ReviewView: View {
         .disabled(viewModel.totalToDelete == 0)
     }
 
-    // MARK: - Album-wide AI review
-
-    @ViewBuilder
-    private var reviewAllButton: some View {
-        let hasPremium = EntitlementStore.shared.hasPremium
-        let providers = activeProviders()
-        let isReviewingAny = viewModel.groups.contains(where: { $0.isAIReviewing })
-
-        if !viewModel.groups.isEmpty {
-            if hasPremium, !providers.isEmpty {
-                if providers.count == 1 {
-                    let p = providers[0]
-                    Button {
-                        Task { await viewModel.requestAIReviewForAllGroups(provider: p) }
-                    } label: {
-                        Label("Review all with \(p.displayName)", systemImage: p.systemImage)
-                    }
-                    .disabled(isReviewingAny)
-                    .help("Run \(p.displayName) on every group")
-                } else {
-                    Menu {
-                        ForEach(providers) { p in
-                            Button {
-                                Task { await viewModel.requestAIReviewForAllGroups(provider: p) }
-                            } label: {
-                                Label("Review all with \(p.displayName)", systemImage: p.systemImage)
-                            }
-                        }
-                        Divider()
-                        Button {
-                            for p in providers {
-                                Task { await viewModel.requestAIReviewForAllGroups(provider: p) }
-                            }
-                        } label: {
-                            Label("Review all with every provider", systemImage: "arrow.triangle.2.circlepath")
-                        }
-                    } label: {
-                        Label("Review All", systemImage: "sparkles")
-                    }
-                    .disabled(isReviewingAny)
-                    .help("Run AI review across every group")
-                }
-            } else if !hasPremium {
-                Button {
-                    showPaywall = true
-                } label: {
-                    Label("Review All", systemImage: "sparkles")
-                }
-                .help("Upgrade to DeDuper Premium to use AI review")
-            }
-        }
-    }
-
-    private func activeProviders() -> [AIProvider] {
-        return [.proxy]
-    }
-
     private func deleteCurrent() {
         guard let id = viewModel.selectedGroupID,
               let group = viewModel.groups.first(where: { $0.id == id }),
@@ -290,14 +275,10 @@ struct ReviewView: View {
 /// were chained on the same ScrollView.
 private enum ActiveSheet: Identifiable {
     case lightbox(Int)
-    case paywall
-    case faceToFace
 
     var id: String {
         switch self {
         case .lightbox(let i): return "lightbox-\(i)"
-        case .paywall:         return "paywall"
-        case .faceToFace:      return "faceToFace"
         }
     }
 }
@@ -329,24 +310,15 @@ struct GroupDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         // Single sheet — avoids "only the last sheet fires" SwiftUI multi-sheet bug.
+        // Face-to-Face is intentionally NOT presented here: it's hosted as an
+        // in-window overlay at the ReviewView root (so it can toggle native
+        // full-screen and be dismissed by clicking the dimmed backdrop), driven
+        // by viewModel.faceToFaceGroupID.
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .lightbox(let index):
                 PhotoLightboxView(group: group, currentIndex: index)
-            case .paywall:
-                PaywallView()
-            case .faceToFace:
-                FaceToFaceView(group: group) { winnerIndex in
-                    viewModel.selectKeeper(groupID: group.id, itemIndex: winnerIndex)
-                }
             }
-        }
-        // The "F" keyboard shortcut in ReviewView sets faceToFaceGroupID; consume
-        // that signal here so the shortcut still works without a cross-level sheet.
-        .onChange(of: viewModel.faceToFaceGroupID) { _, newID in
-            guard newID == groupID else { return }
-            activeSheet = .faceToFace
-            viewModel.faceToFaceGroupID = nil   // reset so it can fire again
         }
     }
 
@@ -373,42 +345,6 @@ struct GroupDetailView: View {
             if let local = group.localExplanation {
                 explanationCard(icon: "eye.fill", color: .blue, label: "Why this one?", text: local)
             }
-            if let explanation = group.claudeExplanation {
-                explanationCard(icon: "sparkles", color: .purple, label: "AI says", text: explanation)
-            }
-
-            ForEach(AIProvider.allCases) { provider in
-                if let result = group.aiReviews[provider.rawValue] {
-                    AIReviewCard(result: result, photoNumber: result.winnerIndex + 1) {
-                        viewModel.acceptAISuggestion(groupID: group.id, provider: provider)
-                    }
-                } else if let errorMsg = group.aiErrors[provider.rawValue] {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .font(.subheadline)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(provider.displayName) review failed")
-                                .font(.subheadline.bold())
-                            Text(errorMsg)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(10)
-                    .background(.orange.opacity(0.07))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-            }
-
-            if group.isAIReviewing {
-                HStack(spacing: 8) {
-                    ProgressView().frame(width: 16, height: 16)
-                    Text("AI is reviewing…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
 
             Text("Tap a photo to select it as the keeper.\(horizontalSizeClass != .compact ? " Press F for side-by-side, Return to delete this group." : "")")
                 .font(.caption)
@@ -422,7 +358,7 @@ struct GroupDetailView: View {
     private func detailActionRow(group: PhotoGroup) -> some View {
         HStack(spacing: 8) {
             Button {
-                activeSheet = .faceToFace
+                viewModel.faceToFaceGroupID = group.id
             } label: {
                 Label("Face-to-Face", systemImage: "rectangle.split.2x1")
                     .font(.subheadline)
@@ -452,7 +388,6 @@ struct GroupDetailView: View {
                     Text("Deleted photos move to Recently Deleted and can be recovered for 30 days.")
                 }
             }
-            aiMenuButton(group: group)
         }
     }
 
@@ -474,63 +409,6 @@ struct GroupDetailView: View {
         .padding(10)
         .background(color.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    @ViewBuilder
-    private func aiMenuButton(group: PhotoGroup) -> some View {
-        let hasPremium = EntitlementStore.shared.hasPremium
-        let providers = activeProvidersForGroup()
-
-        if hasPremium, !providers.isEmpty {
-            if providers.count == 1 {
-                let p = providers[0]
-                Button {
-                    Task { await viewModel.requestAIReview(groupID: group.id, provider: p) }
-                } label: {
-                    Label("Ask \(p.displayName)", systemImage: p.systemImage)
-                        .font(.subheadline)
-                }
-                .buttonStyle(.bordered)
-                .disabled(group.isAIReviewing)
-            } else {
-                Menu {
-                    ForEach(providers) { p in
-                        Button {
-                            Task { await viewModel.requestAIReview(groupID: group.id, provider: p) }
-                        } label: {
-                            Label("Ask \(p.displayName)", systemImage: p.systemImage)
-                        }
-                    }
-                    Divider()
-                    Button {
-                        for p in providers {
-                            Task { await viewModel.requestAIReview(groupID: group.id, provider: p) }
-                        }
-                    } label: {
-                        Label("Ask All", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                } label: {
-                    Label("Ask AI", systemImage: "sparkles")
-                        .font(.subheadline)
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(group.isAIReviewing)
-            }
-        } else if !hasPremium {
-            Button {
-                activeSheet = .paywall
-            } label: {
-                Label("Ask AI", systemImage: "sparkles")
-                    .font(.subheadline)
-            }
-            .buttonStyle(.bordered)
-            .help("Upgrade to DeDuper Premium to use AI review")
-        }
-    }
-
-    private func activeProvidersForGroup() -> [AIProvider] {
-        return [.proxy]
     }
 
     // MARK: - Responsive grid
@@ -585,44 +463,13 @@ struct GroupDetailView: View {
     }
 }
 
-// MARK: - AI Review Card
-
-private struct AIReviewCard: View {
-    let result: AIReviewResult
-    let photoNumber: Int
-    let onAccept: () -> Void
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: result.provider.systemImage)
-                .foregroundStyle(result.provider.accentColor)
-                .font(.subheadline)
-                .padding(.top, 1)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("\(result.provider.displayName) recommends photo \(photoNumber)")
-                        .font(.subheadline.bold())
-                    Spacer()
-                    Button("Accept", action: onAccept)
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
-                Text(result.reason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(10)
-        .background(result.provider.accentColor.opacity(0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-// MARK: - PhotoGroup Identifiable for .sheet(item:)
-
-extension PhotoGroup: Equatable {
-    static func == (lhs: PhotoGroup, rhs: PhotoGroup) -> Bool { lhs.id == rhs.id }
-}
+// NOTE: PhotoGroup intentionally does NOT conform to Equatable.
+//
+// `.sheet(item:)` and List selection only require Identifiable (already
+// satisfied by `let id = UUID()`). An id-only `Equatable` conformance is a
+// SwiftUI footgun: views that store `let group: PhotoGroup` (GroupRow in the
+// sidebar, PhotoLightboxView, FaceToFaceView) are diffed via that `==`, so a
+// group whose `keptIndices` changed reads as "unchanged" (same id) and the row
+// never re-renders — the "−N" / "Keep X of Y" badges go stale even though the
+// underlying data updated. Without the conformance, SwiftUI's structural diff
+// compares the stored fields (incl. `keptIndices`) and re-renders correctly.

@@ -3,7 +3,10 @@
 ## Files
 
 ### `KeychainHelper.swift`
-Static wrapper around `Security.framework` for storing API keys in the system Keychain.
+Static wrapper around `Security.framework` for storing small secrets in the system Keychain.
+The app no longer stores API or license keys; the only live use is
+`deleteLegacyFileStorage()` at launch (a one-time cleanup of an old plaintext key store).
+The generic `save`/`retrieve`/`delete` API is retained for completeness.
 
 **Security properties applied to every item:**
 - `kSecAttrService` — set to `Bundle.main.bundleIdentifier`, scoping items to this app
@@ -19,7 +22,5 @@ KeychainHelper.delete(key:)
 KeychainHelper.deleteLegacyFileStorage() // one-time migration: removes old plaintext Keys/ dir
 ```
 
-**Keys in use:**
-- `"claude_api_key"` — Anthropic API key
-- `"openai_api_key"` — OpenAI API key
-- `"groq_api_key"` — Groq API key
+No keys are written by the app anymore (the AI-key and license-key features were removed).
+`deleteLegacyFileStorage()` runs once at launch to purge any old on-disk key store.

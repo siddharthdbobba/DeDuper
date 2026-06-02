@@ -18,12 +18,10 @@ struct FaceAnalyzer {
         let faceCount: Int
         /// Mean eye-open confidence in `[0, 1]` across all detected faces.
         let meanEyeOpenness: Double
-        /// Whether at least one face appears to be smiling.
-        let anySmile: Bool
     }
 
     /// Empty/safe result for photos that don't contain analyzable faces.
-    static let noFaces = Result(score: 0, faceCount: 0, meanEyeOpenness: 0, anySmile: false)
+    static let noFaces = Result(score: 0, faceCount: 0, meanEyeOpenness: 0)
 
     /// Analyzes a single thumbnail. Returns `.noFaces` if no faces were detected
     /// or if Vision failed. Callers must inspect `faceCount` before mixing the
@@ -100,8 +98,7 @@ struct FaceAnalyzer {
             continuation.resume(returning: Result(
                 score: score,
                 faceCount: observations.count,
-                meanEyeOpenness: meanEye,
-                anySmile: smileLikely
+                meanEyeOpenness: meanEye
             ))
         }
     }

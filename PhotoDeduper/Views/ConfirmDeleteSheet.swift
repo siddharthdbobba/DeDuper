@@ -5,7 +5,7 @@ struct ConfirmDeleteSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private var isHoldForReview: Bool {
-        UserDefaults.standard.bool(forKey: "holdForReview")
+        AppDefaults.holdForReview
     }
 
     var body: some View {

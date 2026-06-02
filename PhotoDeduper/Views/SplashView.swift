@@ -16,8 +16,6 @@ struct SplashView: View {
 #endif
     @State private var showAlbumPicker = false
 
-    @AppStorage("hasShownAIDisclosure") private var hasShownAIDisclosure = false
-    @State private var showAIDisclosure = false
     @State private var showPhotoPicker = false
     @State private var photoAccessDenied = false
     @State private var photoAuthStatus: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -164,7 +162,7 @@ struct SplashView: View {
         .background(
             LibraryPhotoPicker(
                 isPresented: $showPhotoPicker,
-                filter: UserDefaults.standard.bool(forKey: "scanVideosToo")
+                filter: AppDefaults.scanVideosToo
                     ? PHPickerFilter.any(of: [.images, .videos])
                     : PHPickerFilter.images,
                 onFinish: { results in
@@ -190,11 +188,6 @@ struct SplashView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("DeDuper needs Photos library access to let you hand-pick photos. Open Settings → Privacy → Photos and choose \"All Photos\" or \"Limited Access\".")
-        }
-        .alert("AI Photo Review", isPresented: $showAIDisclosure) {
-            Button("Got it") { hasShownAIDisclosure = true }
-        } message: {
-            Text("When scanning, photos in near-identical groups are automatically sent as 800×800 thumbnails to GPT-4.1 mini for comparison.\n\nYou can turn this off in Settings → \"Auto-review close calls\".")
         }
     }
 }

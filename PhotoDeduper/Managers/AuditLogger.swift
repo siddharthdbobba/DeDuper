@@ -12,8 +12,8 @@ struct AuditEntry: Codable, Identifiable {
     let filename: String?
     let estimatedBytes: Int64
     let groupSize: Int
-    let aiProvider: String?
-    let aiReason: String?
+    /// Why the keeper was chosen (on-device close-call explanation), if any.
+    let reason: String?
     let restored: Bool
 }
 
@@ -100,8 +100,7 @@ final class AuditLogger {
                     filename: all[i].filename,
                     estimatedBytes: all[i].estimatedBytes,
                     groupSize: all[i].groupSize,
-                    aiProvider: all[i].aiProvider,
-                    aiReason: all[i].aiReason,
+                    reason: all[i].reason,
                     restored: true
                 )
             }
@@ -132,7 +131,7 @@ final class AuditLogger {
     /// Throws on file-system errors.
     func exportCSV(to url: URL) throws {
         let all = readAll()
-        let header = "timestamp,photoID,filename,estimatedBytes,groupSize,aiProvider,aiReason,restored\n"
+        let header = "timestamp,photoID,filename,estimatedBytes,groupSize,reason,restored\n"
         var body = header
         let isoFormatter = ISO8601DateFormatter()
         for entry in all {
@@ -142,8 +141,7 @@ final class AuditLogger {
                 csvEscape(entry.filename ?? ""),
                 String(entry.estimatedBytes),
                 String(entry.groupSize),
-                csvEscape(entry.aiProvider ?? ""),
-                csvEscape(entry.aiReason ?? ""),
+                csvEscape(entry.reason ?? ""),
                 entry.restored ? "yes" : "no",
             ]
             body += cells.joined(separator: ",") + "\n"

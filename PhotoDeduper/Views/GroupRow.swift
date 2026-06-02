@@ -47,19 +47,11 @@ struct GroupRow: View {
                         .clipShape(Capsule())
                 }
 
-                HStack(spacing: 4) {
-                    if !group.aiReviews.isEmpty {
-                        Image(systemName: "sparkles")
-                            .font(.caption2)
-                            .foregroundStyle(.purple)
-                            .help("AI reviewed")
-                    }
-                    if group.localExplanation != nil {
-                        Image(systemName: "eye.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.blue)
-                            .help("On-device face analysis decided")
-                    }
+                if group.localExplanation != nil {
+                    Image(systemName: "eye.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.blue)
+                        .help("On-device face analysis decided")
                 }
             }
         }
@@ -77,13 +69,6 @@ struct GroupRow: View {
                 .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(.orange.opacity(0.15))
                 .foregroundStyle(.orange)
-                .clipShape(Capsule())
-        case .crossFormat:
-            Text("HEIC/JPG")
-                .font(.caption2.bold())
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(.purple.opacity(0.15))
-                .foregroundStyle(.purple)
                 .clipShape(Capsule())
         case .video:
             Text("VIDEO")
