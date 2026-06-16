@@ -25,6 +25,11 @@ struct GroupRow: View {
                 HStack(spacing: 4) {
                     Text("Keep \(group.keptIndices.count) of \(group.items.count)")
                         .font(.subheadline.bold())
+                        // Stay on one line: in a dragged-narrow sidebar or at large
+                        // accessibility text sizes this would otherwise wrap mid-
+                        // phrase ("Keep 2 of / 7") next to the origin badge. One
+                        // clean truncation reads better than an awkward two-line wrap.
+                        .lineLimit(1)
                     originBadge
                 }
                 if let date = group.items.first?.creationDate {
@@ -38,7 +43,12 @@ struct GroupRow: View {
 
             VStack(alignment: .trailing, spacing: 4) {
                 if group.itemsToDelete.count > 0 {
-                    Text("−\(group.itemsToDelete.count)")
+                    // Colorblind cue: the badge was red-fill + red-text only, so a
+                    // red/green-impaired user couldn't tell "−N to delete" from a
+                    // neutral count. Prefixing a trash glyph encodes "for deletion"
+                    // in shape, not just hue. Kept compact (small icon font, tight
+                    // padding) so the row stays the same height.
+                    Label("\(group.itemsToDelete.count)", systemImage: "trash")
                         .font(.caption.bold())
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
@@ -51,7 +61,15 @@ struct GroupRow: View {
                     Image(systemName: "eye.fill")
                         .font(.caption2)
                         .foregroundStyle(.blue)
-                        .help("On-device face analysis decided")
+                        // The static "face analysis decided" copy lied for the
+                        // sharpness-veto case: the SAME icon shows when the
+                        // resolver kept the sharper copy (no faces involved), so
+                        // a face-specific tooltip there was just wrong. Surface
+                        // the group's ACTUAL localExplanation (the same text the
+                        // detail pane's "Why this one?" card shows), falling back
+                        // to a neutral phrasing only if it's somehow nil despite
+                        // the `!= nil` guard above.
+                        .help(group.localExplanation ?? "On-device analysis picked the keeper")
                 }
             }
         }

@@ -10,6 +10,7 @@ struct SettingsView: View {
 
     @State private var scanVideosToo: Bool = AppDefaults.scanVideosToo
     @State private var holdForReview: Bool = AppDefaults.holdForReview
+    @State private var confirmBeforeDelete: Bool = AppDefaults.confirmBeforeDelete
 
     @State private var showProtectedPicker = false
     @State private var protectedAlbumIDs: [String] = AppDefaults.protectedAlbumIDs
@@ -54,14 +55,28 @@ struct SettingsView: View {
 
     private var groupingSection: some View {
         Section {
-            Picker("Sensitivity", selection: $sensitivity) {
-                ForEach(Sensitivity.allCases) { s in
-                    Text(s.label).tag(s)
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Sensitivity", selection: $sensitivity) {
+                    ForEach(Sensitivity.allCases) { s in
+                        Text(s.label).tag(s)
+                    }
                 }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: sensitivity) { _, new in
-                new.apply(to: &timeWindow, hashThreshold: &hashThreshold, closeCallThreshold: &closeCallThreshold)
+                .pickerStyle(.segmented)
+                .onChange(of: sensitivity) { _, new in
+                    new.apply(to: &timeWindow, hashThreshold: &hashThreshold, closeCallThreshold: &closeCallThreshold)
+                }
+                // Plain-language gloss on the selected preset. The segmented
+                // labels alone ("Conservative"/"Aggressive") don't tell a normal
+                // user what they'll actually get — does Aggressive delete more,
+                // or just find more? — so this caption spells out the trade-off
+                // (fewer/safer ⟷ more/review-carefully) and updates live with
+                // the selection (Custom explains the sliders take over). Reads
+                // from `sensitivity.plainDescription` so the copy lives next to
+                // the preset definitions, not inlined here.
+                Text(sensitivity.plainDescription)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -74,7 +89,7 @@ struct SettingsView: View {
                 }
                 Slider(value: $timeWindow, in: 5...120, step: 5)
                     .onChange(of: timeWindow) { _, _ in sensitivity = sensitivityFromSliders() }
-                Text("Photos taken within this many seconds of each other are candidates for grouping.")
+                Text("Photos taken within this many seconds of each other are compared.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -89,7 +104,7 @@ struct SettingsView: View {
                 }
                 Slider(value: $hashThreshold, in: 5...30, step: 1)
                     .onChange(of: hashThreshold) { _, _ in sensitivity = sensitivityFromSliders() }
-                Text("Lower = stricter; higher = looser.")
+                Text("How visually close two photos must be to count as duplicates. Lower = stricter (only near-identical); higher = looser.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -104,7 +119,7 @@ struct SettingsView: View {
                 }
                 Slider(value: $closeCallThreshold, in: 5...40, step: 1)
                     .onChange(of: closeCallThreshold) { _, _ in sensitivity = sensitivityFromSliders() }
-                Text("When the top two scores are within this percent, the on-device resolver takes over.")
+                Text("When the top two photos score within this margin, the app uses extra on-device analysis to pick the keeper.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -122,6 +137,9 @@ struct SettingsView: View {
             }
             Toggle(isOn: $holdForReview) {
                 Label("Hold for review (don't delete immediately)", systemImage: "tray.full")
+            }
+            Toggle(isOn: $confirmBeforeDelete) {
+                Label("Confirm before delete", systemImage: "questionmark.circle")
             }
         } header: {
             Label("Behavior", systemImage: "switch.2")
@@ -221,6 +239,7 @@ struct SettingsView: View {
         AppDefaults.closeCallThreshold = closeCallThreshold
         AppDefaults.scanVideosToo = scanVideosToo
         AppDefaults.holdForReview = holdForReview
+        AppDefaults.confirmBeforeDelete = confirmBeforeDelete
         AppDefaults.protectedAlbumIDs = protectedAlbumIDs
         dismiss()
     }
@@ -237,6 +256,21 @@ enum Sensitivity: String, CaseIterable, Identifiable, Hashable {
         case .balanced:     "Balanced"
         case .aggressive:   "Aggressive"
         case .custom:       "Custom"
+        }
+    }
+
+    /// One-line, jargon-free explanation of what choosing this preset DOES, for
+    /// the live caption under the Settings sensitivity picker. Phrased around
+    /// the user-visible trade-off (how many matches, how safe) rather than the
+    /// underlying thresholds — the sliders below already show those. Lives here,
+    /// beside `label` and `thresholds`, so the preset's name, values, and human
+    /// description stay in one place and can't drift apart.
+    var plainDescription: String {
+        switch self {
+        case .conservative: "Only near-identical copies — the fewest matches, safest."
+        case .balanced:     "Everyday duplicates and burst shots. Recommended for most libraries."
+        case .aggressive:   "Also groups loosely-similar shots — the most matches, so review carefully."
+        case .custom:       "Your own thresholds, set with the sliders below."
         }
     }
 

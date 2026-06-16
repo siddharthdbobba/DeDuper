@@ -34,16 +34,71 @@ enum DeletionMode {
     case holdForReview
 }
 
+/// A file that was moved to the macOS Trash: where it came from and where it
+/// landed, so undo can move it straight back.
+struct TrashedFile {
+    let originalURL: URL
+    let trashedURL: URL
+}
+
 /// Summary returned by `deleteItems` — carries enough information for the
 /// undo banner and audit log to attribute work back to specific assets.
 struct DeletionReceipt {
     /// Photos-library asset identifiers that were trashed. These can be
     /// recovered from "Recently Deleted" within 30 days.
     let trashedAssetIDs: [String]
-    /// File URLs moved to macOS Trash.
-    let trashedFileURLs: [URL]
+    /// Files moved to macOS Trash, with their Trash destinations for undo.
+    let trashedFiles: [TrashedFile]
     /// Asset identifiers that were instead added to the review album.
     let stagedAssetIDs: [String]
+    /// Number of file URLs that could NOT be trashed. Successes above are
+    /// still valid; the ViewModel decides how to surface partial failure.
+    let failedCount: Int
+    /// localizedDescription of the first failure, for user-facing messaging.
+    let firstFailureDescription: String?
+
+    /// Ready-made error copy for the nothing-succeeded case, shared by both
+    /// delete paths (per-group and confirm-all) so the wording can't drift.
+    /// `nil` whenever at least one item was deleted/staged — callers surface
+    /// partial failure with a non-blocking notice instead of an error state.
+    var allFailedMessage: String? {
+        guard failedCount > 0,
+              trashedAssetIDs.isEmpty, trashedFiles.isEmpty, stagedAssetIDs.isEmpty else { return nil }
+        return "Deleted 0, failed \(failedCount): \(firstFailureDescription ?? "Unknown error")"
+    }
+
+    /// Returns this receipt with `previous`'s undo handles merged in.
+    ///
+    /// Used when a new deletion lands while an undo banner is still active:
+    /// overwriting `lastReceipt` would discard the previous batch's
+    /// `TrashedFile` entries — the only handles that can move those files back
+    /// out of the Trash — so the new receipt absorbs them instead, letting one
+    /// Undo restore both batches. Entries are deduped by original URL / asset
+    /// ID (self's entries win). `failedCount` and `firstFailureDescription`
+    /// are NOT merged: they describe the latest attempt only, and callers key
+    /// retry/partial-failure behaviour off them.
+    func absorbing(_ previous: DeletionReceipt?) -> DeletionReceipt {
+        guard let previous else { return self }
+        var mergedFiles = trashedFiles
+        let knownOriginals = Set(mergedFiles.map(\.originalURL))
+        mergedFiles.append(contentsOf: previous.trashedFiles.filter { !knownOriginals.contains($0.originalURL) })
+
+        var mergedTrashedIDs = trashedAssetIDs
+        let knownTrashedIDs = Set(mergedTrashedIDs)
+        mergedTrashedIDs.append(contentsOf: previous.trashedAssetIDs.filter { !knownTrashedIDs.contains($0) })
+
+        var mergedStagedIDs = stagedAssetIDs
+        let knownStagedIDs = Set(mergedStagedIDs)
+        mergedStagedIDs.append(contentsOf: previous.stagedAssetIDs.filter { !knownStagedIDs.contains($0) })
+
+        return DeletionReceipt(
+            trashedAssetIDs: mergedTrashedIDs,
+            trashedFiles: mergedFiles,
+            stagedAssetIDs: mergedStagedIDs,
+            failedCount: failedCount,
+            firstFailureDescription: firstFailureDescription
+        )
+    }
 }
 
 enum BatchDeleteManager {
@@ -69,11 +124,13 @@ enum BatchDeleteManager {
         switch mode {
         case .directDelete:
             if !assets.isEmpty { try await deletePhotoAssets(assets) }
-            let trashedURLs = try trashFiles(urls, folderScope: folderScope)
+            let result = trashFiles(urls, folderScope: folderScope)
             return DeletionReceipt(
                 trashedAssetIDs: assets.map(\.localIdentifier),
-                trashedFileURLs: trashedURLs,
-                stagedAssetIDs: []
+                trashedFiles: result.trashed,
+                stagedAssetIDs: [],
+                failedCount: result.failures.count,
+                firstFailureDescription: result.failures.first?.localizedDescription
             )
 
         case .holdForReview:
@@ -82,11 +139,13 @@ enum BatchDeleteManager {
             if !assets.isEmpty {
                 try await addToReviewAlbum(assets)
             }
-            let trashedURLs = try trashFiles(urls, folderScope: folderScope)
+            let result = trashFiles(urls, folderScope: folderScope)
             return DeletionReceipt(
                 trashedAssetIDs: [],
-                trashedFileURLs: trashedURLs,
-                stagedAssetIDs: assets.map(\.localIdentifier)
+                trashedFiles: result.trashed,
+                stagedAssetIDs: assets.map(\.localIdentifier),
+                failedCount: result.failures.count,
+                firstFailureDescription: result.failures.first?.localizedDescription
             )
         }
     }
@@ -181,20 +240,41 @@ enum BatchDeleteManager {
 
     /// Trashes every URL while holding the parent folder's security scope open,
     /// so child URLs (which carry no bookmark of their own) stay accessible.
-    private static func trashFiles(_ urls: [URL], folderScope: URL?) throws -> [URL] {
-        guard !urls.isEmpty else { return [] }
+    ///
+    /// Attempts every URL even when some fail, so files already moved to the
+    /// Trash are never silently unreported: successes carry their Trash
+    /// destination (for undo) and failures are collected for the caller to
+    /// surface as a partial-failure message.
+    private static func trashFiles(_ urls: [URL], folderScope: URL?) -> (trashed: [TrashedFile], failures: [Error]) {
+        guard !urls.isEmpty else { return ([], []) }
         let scoped = folderScope?.startAccessingSecurityScopedResource() ?? false
         defer { if scoped { folderScope?.stopAccessingSecurityScopedResource() } }
 
-        var trashed: [URL] = []
+        var trashed: [TrashedFile] = []
+        var failures: [Error] = []
         for url in urls {
-            try trashFile(url)
-            trashed.append(url)
+            // Already-gone originals are vacuous successes, not failures.
+            // After a partial failure the ViewModel keeps the whole group for
+            // retry, so the retry re-submits items whose files the first
+            // attempt DID trash. Re-attempting `trashFile` on those would
+            // throw `trashFailed`, inflating `failedCount` (the group could
+            // then never be removed) — so skip them silently. No TrashedFile
+            // entry is emitted either: this attempt moved nothing, and the
+            // attempt that actually trashed the file already holds the undo
+            // handle in its own receipt.
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do {
+                let destination = try trashFile(url)
+                trashed.append(TrashedFile(originalURL: url, trashedURL: destination))
+            } catch {
+                failures.append(error)
+            }
         }
-        return trashed
+        return (trashed, failures)
     }
 
-    private static func trashFile(_ url: URL) throws {
+    /// Moves one file to the Trash and returns where it landed.
+    private static func trashFile(_ url: URL) throws -> URL {
 #if os(macOS)
         // Best-effort per-child scope: a child URL enumerated under a
         // security-scoped folder has no bookmark of its own, so this often
@@ -203,7 +283,12 @@ enum BatchDeleteManager {
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            var resultingURL: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
+            // trashItem always populates the out-param on success; the fallback
+            // keeps undo safely best-effort (the original no longer exists, so
+            // a restore attempt would just be skipped).
+            return (resultingURL as URL?) ?? url
         } catch {
             throw DeleteError.trashFailed(url, error)
         }
@@ -212,5 +297,32 @@ enum BatchDeleteManager {
         // file URL items never reach this code path in production.
         throw DeleteError.accessDenied
 #endif
+    }
+
+    /// Moves previously trashed files back to their original locations,
+    /// holding the folder's security scope open like `trashFiles` does.
+    ///
+    /// Best-effort per file: entries whose Trash URL no longer exists (the
+    /// user emptied the Trash) or whose original path is now occupied are
+    /// skipped. Returns the entries that were actually restored so the caller
+    /// can mark the matching audit-log records.
+    static func restoreTrashedFiles(_ files: [TrashedFile], folderScope: URL?) -> [TrashedFile] {
+        guard !files.isEmpty else { return [] }
+        let scoped = folderScope?.startAccessingSecurityScopedResource() ?? false
+        defer { if scoped { folderScope?.stopAccessingSecurityScopedResource() } }
+
+        let fm = FileManager.default
+        var restored: [TrashedFile] = []
+        for file in files {
+            guard fm.fileExists(atPath: file.trashedURL.path),
+                  !fm.fileExists(atPath: file.originalURL.path) else { continue }
+            do {
+                try fm.moveItem(at: file.trashedURL, to: file.originalURL)
+                restored.append(file)
+            } catch {
+                continue  // best-effort: leave the file in the Trash
+            }
+        }
+        return restored
     }
 }

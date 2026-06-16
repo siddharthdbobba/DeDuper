@@ -16,11 +16,12 @@ Shown during `.scanning` state. Displays a `ProgressView` bar and the current st
 ### `ReviewView.swift`
 Main two-pane layout shown during `.reviewing` state.
 
-- **Sidebar**: `List` of `GroupRow` items; drives `viewModel.selectedGroupID`
+- **Sidebar**: `List` of `GroupRow` items; drives `viewModel.selectedGroupID`. When groups are staged, a footer shows "N staged" with a Restore button (`restoreStagedGroups()`)
 - **Detail**: `GroupDetailView` for the selected group
+- Per-group actions (`d` key, "Stage N" button) only *stage* a group via `viewModel.stageGroup` — no confirmation dialog, since staging is non-destructive. Actual deletion happens only via the toolbar "Delete N Photos" flush (one PhotoKit request → one macOS system prompt per session)
 
 **`GroupDetailView`** renders:
-- Header with photo count, the on-device "Why this one?" explanation (if present), and Face-to-Face / Delete actions
+- Header with photo count, the on-device "Why this one?" explanation (if present), and Face-to-Face / Stage actions
 - `LazyVGrid` of `PhotoCard` views — passes `group.displayScores[i]` (not raw scores)
 
 ### `PhotoCard.swift`
@@ -39,7 +40,7 @@ Full-size image viewer opened by double-clicking a `PhotoCard`.
 Compact sidebar row showing photo count and whether the group is a close call.
 
 ### `ConfirmDeleteSheet.swift`
-Modal confirmation before deletion. Shows count of photos to delete, groups to keep, and estimated space freed. Calls `viewModel.confirmDelete()` on confirmation.
+Modal confirmation before the final flush (the only confirmation in the delete flow — staging has none). Counts span live AND staged groups. Calls `viewModel.confirmDelete()` on confirmation.
 
 ### `DoneView.swift`
 Summary screen shown after successful deletion: kept count, deleted count, freed bytes.

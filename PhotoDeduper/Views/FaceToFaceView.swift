@@ -131,7 +131,12 @@ struct FaceToFaceView: View {
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
-        .onAppear { isFocused = true }
+        // Deferred focus grab — SwiftUI on macOS may drop a synchronous
+        // FocusState write made during the same transaction the view is
+        // inserted, leaving focus nowhere (ReviewView lost it, this view never
+        // got it) and ALL keyboard input dead. Deferring one runloop turn makes
+        // the grab land after insertion completes.
+        .onAppear { Task { @MainActor in isFocused = true } }
         .onKeyPress { press in
             guard press.modifiers.isEmpty else { return .ignored }
             switch press.characters {
@@ -149,6 +154,14 @@ struct FaceToFaceView: View {
         .onKeyPress(.upArrow)    { cycle(side: .left,  by: -1); return .handled }
         .onKeyPress(.downArrow)  { cycle(side: .left,  by: +1); return .handled }
         .onKeyPress(.escape)     { onClose(); return .handled }
+#if os(macOS)
+        // Verified live: macOS delivers Esc as the cancel command
+        // (cancelOperation:) ahead of key-press dispatch, so the
+        // .onKeyPress(.escape) above never fires even when this view holds
+        // focus. onExitCommand is the platform's reliable Esc hook; the
+        // onKeyPress stays for hardware-keyboard Esc on the iOS build.
+        .onExitCommand { onClose() }
+#endif
     }
 
     // MARK: - Top bar

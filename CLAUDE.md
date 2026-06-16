@@ -41,5 +41,5 @@ PhotoDeduper/          ← Main Swift source target
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `timeWindow` | 30s | Photos taken within this window are grouped as candidates |
-| `pHashThreshold` | 20 bits | Max Hamming distance for visual similarity (dHash) |
+| `pHashThreshold` | 15 bits | Max Hamming distance for visual similarity (dHash) |
 | `closeCallThreshold` | 15% | Score gap below which the on-device resolver breaks the tie |

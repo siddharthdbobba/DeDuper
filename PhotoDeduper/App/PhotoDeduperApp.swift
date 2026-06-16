@@ -43,16 +43,24 @@ enum AppDefaults {
         static let closeCallThreshold = "closeCallThreshold"
         static let scanVideosToo = "scanVideosToo"
         static let holdForReview = "holdForReview"
+        static let confirmBeforeDelete = "confirmBeforeDelete"
+        static let hasSeenDeleteInfo = "hasSeenDeleteInfo"
         static let protectedAlbumIDs = "protectedAlbumIDs"
         static let reviewAlbumLocalID = "reviewAlbumLocalID"
     }
 
     // Default values — single source of truth, also registered at launch so
     // `.object(forKey:)` reads return sane values on first run.
+    // (30, 15, 15) matches the "Balanced" preset (see Sensitivity.thresholds),
+    // so fresh installs show "Balanced" in Settings rather than "Custom".
     static let timeWindowDefault = 30.0
-    static let pHashThresholdDefault = 20
+    static let pHashThresholdDefault = 15
     static let closeCallThresholdDefault = 15.0
     static let holdForReviewDefault = false
+    // Default OFF — pressing Delete removes photos immediately (they still go to
+    // Recently Deleted and Cmd+Z undoes). Users who want the extra prompt can
+    // re-enable it via Settings → Behavior → "Confirm before delete".
+    static let confirmBeforeDeleteDefault = false
 
     /// Registered with `UserDefaults` at launch. `register(defaults:)` only
     /// affects keys with no explicitly-set value, so existing users keep theirs.
@@ -61,6 +69,7 @@ enum AppDefaults {
         Key.pHashThreshold: pHashThresholdDefault,
         Key.closeCallThreshold: closeCallThresholdDefault,
         Key.holdForReview: holdForReviewDefault,
+        Key.confirmBeforeDelete: confirmBeforeDeleteDefault,
     ]
 
     /// Seconds; photos taken within this window are grouped as candidates.
@@ -91,6 +100,22 @@ enum AppDefaults {
     static var holdForReview: Bool {
         get { store.bool(forKey: Key.holdForReview) }
         set { store.set(newValue, forKey: Key.holdForReview) }
+    }
+
+    /// Whether to show a confirmation dialog before deleting.
+    static var confirmBeforeDelete: Bool {
+        get { store.object(forKey: Key.confirmBeforeDelete) as? Bool ?? confirmBeforeDeleteDefault }
+        set { store.set(newValue, forKey: Key.confirmBeforeDelete) }
+    }
+
+    /// Whether the user has ever seen the one-time educational delete explainer.
+    /// Latched true the first time they confirm a frictionless flush (see
+    /// ReviewView.deleteButton). Internal bookkeeping, not a user-facing setting,
+    /// so it has no registered default — `false` (the bool default) correctly
+    /// means "not yet shown", and existing users start fresh and see it once.
+    static var hasSeenDeleteInfo: Bool {
+        get { store.bool(forKey: Key.hasSeenDeleteInfo) }
+        set { store.set(newValue, forKey: Key.hasSeenDeleteInfo) }
     }
 
     /// Local identifiers of albums whose photos are protected from deletion.

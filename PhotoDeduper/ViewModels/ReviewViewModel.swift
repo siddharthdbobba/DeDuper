@@ -69,15 +69,55 @@ enum ScanPhase: String {
 @MainActor
 final class ReviewViewModel: ObservableObject {
     @Published var groups: [PhotoGroup] = []
+    /// Groups the user has set aside for deletion ("mark, then flush").
+    /// Staging is a pure local state move — nothing touches PhotoKit or the
+    /// file system until `confirmDelete()` flushes everything in one request.
+    /// Kept separate from `groups` (rather than a flag on PhotoGroup) so the
+    /// sidebar/detail views keep iterating `groups` unchanged and the staged
+    /// set can be restored wholesale.
+    @Published private(set) var stagedGroups: [PhotoGroup] = []
     @Published var selectedGroupID: UUID?
     @Published var scanState: ScanState = .idle
     @Published var showConfirmDelete = false
     @Published var faceToFaceGroupID: UUID?
     @Published var lastReceipt: DeletionReceipt?
     @Published var undoBannerExpiresAt: Date?
+    /// Short-lived, non-blocking status line (partial deletion failures, undo
+    /// shortfalls). Auto-cleared by `showTransientNotice` after a few seconds,
+    /// mirroring the undo banner's expiry handling — these outcomes matter but
+    /// shouldn't hijack the whole window the way `scanState = .error` does.
+    @Published var transientNotice: String?
+    /// How many items the last `confirmDelete` failed to remove. Stashed here
+    /// (rather than widening `ScanState.done`, which would ripple through
+    /// ContentView's pattern matches) so DoneView can show a warning line next
+    /// to its stats. Cleared by `reset()`.
+    @Published private(set) var lastDeleteFailedCount: Int = 0
+
+    /// Drives the in-review "Settings changed — they apply to a new scan"
+    /// banner. The scan-affecting settings (timeWindow, pHashThreshold,
+    /// closeCallThreshold, scanVideosToo, protectedAlbumIDs) are read ONCE at
+    /// the top of `runPipeline`, so editing them mid-review changes nothing on
+    /// screen — users reported tweaking the sliders and assuming the app was
+    /// broken. ReviewView snapshots those values before opening Settings and,
+    /// on dismissal, flips this true if any changed, prompting an offer to
+    /// rescan. Reset by `rescan()` (it re-runs with the new values) and the
+    /// banner's "X" dismiss; also cleared by `reset()` so a fresh session
+    /// never inherits a stale prompt.
+    @Published var pendingRescan = false
 
     /// The currently running scan task, if any. Held so the user can cancel mid-scan.
     private var currentScanTask: Task<Void, Never>?
+
+    /// A closure that re-invokes the SAME scan entry point the current results
+    /// came from, with the SAME argument (album / folder URL / picked IDs).
+    /// Captured at the top of each entry point so `rescan()` can replay the
+    /// exact scan after the user changes settings mid-review — without
+    /// ReviewView having to know which of the four scan modes produced the
+    /// current groups. Plain library scans capture a no-arg closure; the album
+    /// and picked-photos scans close over their argument; the folder scan could
+    /// read `scannedFolderURL`, but it captures `url` too so every entry point
+    /// follows the same one-line pattern.
+    private var lastScanAction: (() -> Void)?
     private var scanStartTime: Date? {
         didSet { etaSamples.removeAll() }
     }
@@ -88,6 +128,10 @@ final class ReviewViewModel: ObservableObject {
     /// SwiftUI doesn't re-evaluate `hasActiveUndo` on its own; a timer is
     /// required to nil out `undoBannerExpiresAt` and trigger a view update.
     private var undoExpiryTask: Task<Void, Never>?
+    /// Task that clears `transientNotice` at the end of its display window —
+    /// same rationale as `undoExpiryTask`: nothing else would trigger the
+    /// view update that hides the notice.
+    private var transientNoticeTask: Task<Void, Never>?
     let sessionStart = Date()
 
     /// Asset IDs the user has marked as belonging to protected albums.
@@ -100,23 +144,45 @@ final class ReviewViewModel: ObservableObject {
     /// carry no bookmark of their own.
     private var scannedFolderURL: URL?
 
-    /// Re-entry guard against double-delete. Set on entry to deleteGroup /
-    /// confirmDelete and cleared on every exit path so a second rapid tap
-    /// (e.g. double-tap on the delete button) can't kick off a concurrent
-    /// deletion of the same items.
+    /// Re-entry guard against double-delete. Set on entry to confirmDelete and
+    /// cleared on every exit path so a second rapid tap (e.g. double-tap on
+    /// the delete button) can't kick off a concurrent deletion of the same items.
     private var isDeleting = false
 
+    // Both aggregates span `groups` AND `stagedGroups`: the toolbar's
+    // "Delete N Photos" flush deletes everything from both collections, so the
+    // count/bytes it advertises must match what the flush will actually do.
     var totalToDelete: Int {
-        groups.reduce(0) { $0 + $1.itemsToDelete.count }
+        (groups + stagedGroups).reduce(0) { $0 + $1.itemsToDelete.count }
     }
 
     var estimatedFreedBytes: Int64 {
-        groups.flatMap(\.itemsToDelete).reduce(Int64(0)) { $0 + $1.estimatedByteSize }
+        (groups + stagedGroups).flatMap(\.itemsToDelete).reduce(Int64(0)) { $0 + $1.estimatedByteSize }
     }
 
     var hasActiveUndo: Bool {
         guard let expiry = undoBannerExpiresAt else { return false }
         return expiry > Date()
+    }
+
+    /// Whether the last delete is still recoverable, independent of the
+    /// in-review banner's countdown. `hasActiveUndo` expires with the banner
+    /// timer; this stays true as long as a receipt exists — files are still in
+    /// the Trash and assets in Recently Deleted (both 30 days). DoneView gates
+    /// its Undo button on THIS, not `hasActiveUndo`, so a user sitting on the
+    /// success screen can always undo without a hidden timer yanking the button
+    /// away. Cleared only by `attemptUndo` (consumes the receipt) and `reset()`.
+    var canUndoLastDelete: Bool { lastReceipt != nil }
+
+    /// True when the current results came from a folder scan, where deletion
+    /// means the macOS Trash rather than Photos' Recently Deleted. Views use
+    /// this to pick the right confirmation/done copy.
+    var isFolderScan: Bool { scannedFolderURL != nil }
+
+    /// True when the last deletion moved files to the macOS Trash, so undo can
+    /// genuinely put them back (vs. just opening Photos for library assets).
+    var lastReceiptHasFileDeletions: Bool {
+        !(lastReceipt?.trashedFiles.isEmpty ?? true)
     }
 
     /// Platform-specific message shown when full-library Photos authorization is denied.
@@ -132,6 +198,10 @@ final class ReviewViewModel: ObservableObject {
 
     func startScan() {
         cancelScan()
+        // Capture this exact invocation so `rescan()` can replay it verbatim
+        // after a mid-review settings change. No argument to retain — a full
+        // library scan re-runs by just calling itself.
+        lastScanAction = { [weak self] in self?.startScan() }
         currentScanTask = Task { [weak self] in
             guard let self else { return }
             self.scanStartTime = Date()
@@ -154,6 +224,9 @@ final class ReviewViewModel: ObservableObject {
 
     func startAlbumScan(album: PhotoAlbum) {
         cancelScan()
+        // Close over `album` so `rescan()` re-scans the SAME album, not the
+        // whole library — replaying the user's actual scope.
+        lastScanAction = { [weak self] in self?.startAlbumScan(album: album) }
         currentScanTask = Task { [weak self] in
             guard let self else { return }
             self.scanStartTime = Date()
@@ -194,6 +267,9 @@ final class ReviewViewModel: ObservableObject {
     func startPickedPhotosScan(identifiers: [String]) {
         cancelScan()
         guard !identifiers.isEmpty else { return }
+        // Close over the picked `identifiers` so `rescan()` re-resolves and
+        // re-scans the same hand-picked set rather than the whole library.
+        lastScanAction = { [weak self] in self?.startPickedPhotosScan(identifiers: identifiers) }
         currentScanTask = Task { [weak self] in
             guard let self else { return }
             self.scanStartTime = Date()
@@ -228,7 +304,11 @@ final class ReviewViewModel: ObservableObject {
                 // should always resolve.  If they don't it's most likely
                 // because the photos live in a Shared Library or a People
                 // album that isn't part of the user's personal library.
-                self.scanState = .error("DeDuper couldn't read the selected photos. They may belong to a Shared Library or a People album that isn't part of your personal library. Try \"Choose Album…\" instead.")
+                // Name the likely cause AND give two concrete escape routes:
+                // an owned album (still a Photos scan) or a Mac folder (file
+                // scan, sidesteps PhotoKit entirely) — both bypass the
+                // unresolvable-identifier case above.
+                self.scanState = .error("Couldn't read the selected photos. Some photos (e.g. from a Shared Library) can't be scanned this way — try \"Choose Album…\" for an album you own, or \"Choose Folder…\" for files on your Mac.")
                 return
             }
 
@@ -239,6 +319,11 @@ final class ReviewViewModel: ObservableObject {
     func startFolderScan(url: URL) {
         cancelScan()
         scannedFolderURL = url
+        // Close over `url` so `rescan()` re-scans the SAME folder. (`cancelScan`
+        // inside the replayed call nils `scannedFolderURL`, but the very next
+        // line here re-sets it from the captured `url`, so the security-scoped
+        // scope is restored — no need to read the cleared property.)
+        lastScanAction = { [weak self] in self?.startFolderScan(url: url) }
         currentScanTask = Task { [weak self] in
             guard let self else { return }
             self.scanStartTime = Date()
@@ -248,7 +333,13 @@ final class ReviewViewModel: ObservableObject {
             let items = await lib.scanFolder(url, filter: filter)
             if Task.isCancelled { return }
             guard !items.isEmpty else {
-                self.scanState = .error("No supported image files were found in the selected folder.")
+                // Lists the formats DeDuper actually scans so the user can tell
+                // at a glance whether the empty result is "wrong folder" vs
+                // "unsupported files". The set MUST track PhotoItem.imageExtensions
+                // (jpg/jpeg, png, heic/heif, tiff, and common RAW: cr2/cr3, nef,
+                // arw, dng, raf, orf, rw2) — note GIF is NOT in that set, so it is
+                // deliberately absent here. If imageExtensions changes, change this.
+                self.scanState = .error("No supported images found. DeDuper scans JPEG, PNG, HEIC/HEIF, TIFF, and common RAW files — check that the folder contains those.")
                 return
             }
             await self.runPipeline(items)
@@ -269,6 +360,7 @@ final class ReviewViewModel: ObservableObject {
             // Clear partially-scored clusters so a cancelled scan doesn't leave
             // stale groups in the published array (matches runPipeline's start).
             groups = []
+            stagedGroups = []
             selectedGroupID = nil
         }
     }
@@ -277,6 +369,10 @@ final class ReviewViewModel: ObservableObject {
 
     private func runPipeline(_ items: [PhotoItem]) async {
         groups = []
+        // A new scan invalidates anything staged from the previous results —
+        // those PhotoGroups reference old scan items and must never survive
+        // into the next session's flush.
+        stagedGroups = []
         selectedGroupID = nil
 
         guard !items.isEmpty else {
@@ -287,6 +383,18 @@ final class ReviewViewModel: ObservableObject {
         let timeWindow        = AppDefaults.timeWindow
         let hashThreshold     = AppDefaults.pHashThreshold
         let closeCallFraction = AppDefaults.closeCallThreshold / 100.0
+        /// Sharpness veto threshold, applied in RAW edge-energy space (the
+        /// sigmoid-compressed `PhotoQuality.sharpness` is inverted first — see
+        /// `rawSharpness` in the scoring loop): a proposed keeper must have at
+        /// least this fraction of its group's max raw sharpness, or the keeper
+        /// slot moves to the best-scoring copy that does. Calibrated against
+        /// measured values: at the 512px scoring size a mildly blurred copy
+        /// (2.2px Gaussian at 1600px) lands at raw ratio ~0.81 vs its sharp
+        /// original — real blur the aesthetics model's 0.40 weight in `total`
+        /// can out-vote — while re-encodes of identical content sit at ~0.95+.
+        /// 0.85 splits those; if real-library burst shots ever get vetoed
+        /// spuriously, this is the knob to loosen.
+        let sharpnessVetoFactor = 0.85
 
         // Augment items with protected-album info before the pipeline starts.
         let augmented = applyProtectedFlags(items)
@@ -350,6 +458,48 @@ final class ReviewViewModel: ObservableObject {
             if Task.isCancelled { return }
             let sorted = scores.indices.sorted { scores[$0] > scores[$1] }
             var best = sorted.first ?? 0
+            var localExplanation: String?
+
+            // Sharpness veto. For faceless photos `total` weights aesthetics at
+            // 0.40 (PhotoScorer), and the Vision aesthetics model sometimes
+            // prefers a smoother/blurred copy — enough to out-vote a real
+            // sharpness gap and propose deleting the sharp original. If the
+            // score-winner is materially blurrier than the sharpest copy, hand
+            // the keeper slot to the best-`total` candidate that is acceptably
+            // sharp. Skipped for single-item groups and when maxSharp ≈ 0
+            // (all-blurry/undecodable group — no meaningful sharpness signal,
+            // and it avoids degenerate near-zero comparisons).
+            // Ordering: this runs BEFORE protected promotion (explicit user
+            // signal beats this heuristic) and before the close-call resolver,
+            // which may still override the veto'd pick — acceptable, since that
+            // resolver only fires on a clear face-quality signal on both
+            // candidates, a stronger cue than raw sharpness.
+            // PhotoQuality.sharpness is sigmoid-compressed (raw/(raw+0.5) in
+            // PhotoScorer), and the curve flattens near 1.0: a 45% raw
+            // edge-energy gap (genuinely blurry vs sharp) can land at 0.88 vs
+            // 0.93 — a 0.95 ratio that sails past the veto (verified live on
+            // synthetic near-dups). Invert back to raw space so the ratio test
+            // measures the real gap. The inverse is monotonic, so ordering is
+            // preserved; the 0.5 sigmoid scale cancels out of the ratio.
+            func rawSharpness(_ s: Double) -> Double {
+                s >= 0.9999 ? .infinity : s / (1 - s)
+            }
+            let maxSharp = qualities.map(\.sharpness).max() ?? 0
+            let rawMax = rawSharpness(maxSharp)
+            if group.count >= 2, maxSharp > 0.0001, rawMax.isFinite,
+               rawSharpness(qualities[best].sharpness) < rawMax * sharpnessVetoFactor {
+                // `sorted` is descending by total, so the first survivor of the
+                // sharpness filter is the best-scoring acceptably-sharp copy.
+                if let sharpBest = sorted.first(where: {
+                    rawSharpness(qualities[$0].sharpness) >= rawMax * sharpnessVetoFactor
+                }) {
+                    best = sharpBest
+                    // Surfaced as "Why this one?" in the UI. The close-call
+                    // resolver below may overwrite this when it fires — fine,
+                    // its face-based reason describes the final pick better.
+                    localExplanation = "Kept the sharper copy"
+                }
+            }
 
             // Promote any protected item to proposed keeper. Track whether a
             // promotion occurred — if it did, skip local close-call resolution
@@ -359,7 +509,12 @@ final class ReviewViewModel: ObservableObject {
             // re-applied as keepers wherever `kept` is (re)built below.
             let protectedKeepers = Set(group.indices.filter { group[$0].isProtected })
             let protectedIdx = protectedKeepers.min()
-            if let idx = protectedIdx { best = idx }
+            if let idx = protectedIdx {
+                best = idx
+                // Promotion discards the veto's pick, so its explanation no
+                // longer describes the keeper — drop it rather than mislead.
+                localExplanation = nil
+            }
 
             var isCloseCall = false
             if sorted.count > 1 {
@@ -376,7 +531,7 @@ final class ReviewViewModel: ObservableObject {
 
             // On-device close-call resolution — skipped when a protected item was
             // explicitly promoted, so its proposedKeeperIndex stays correct.
-            var localExplanation: String?
+            // (Declared above so the sharpness veto can also explain its pick.)
             if isCloseCall && protectedIdx == nil {
                 if let (winnerIdx, reason) = resolveCloseCallLocally(qualities: qualities, ranked: sorted) {
                     best = winnerIdx
@@ -405,6 +560,8 @@ final class ReviewViewModel: ObservableObject {
             photoGroup.origin = origin
             groups.append(photoGroup)
             if selectedGroupID == nil { selectedGroupID = photoGroup.id }
+            ThumbnailCache.shared.warmup(for: groups)
+            ThumbnailCache.shared.prefetchICloudAssets(for: groups)
 
             // Scoring spans 0.65–0.97, safely after video matching's max of 0.62.
             // (The old 0.60 start overlapped with video's [0.52, 0.62] range,
@@ -418,7 +575,6 @@ final class ReviewViewModel: ObservableObject {
         if Task.isCancelled { return }
         publishScanState(progress: 0.98, message: "Finishing up…", phase: .finalising)
         scanState = .reviewing
-        ThumbnailCache.shared.warmup(for: groups)
         currentScanTask = nil
     }
 
@@ -438,10 +594,13 @@ final class ReviewViewModel: ObservableObject {
 
     func toggleKeep(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        // Hardening: reject out-of-bounds indices outright. Previously an OOB
+        // index skipped the protected check below and was inserted into
+        // keptIndices anyway. (No current caller passes one.)
+        guard groups[i].items.indices.contains(itemIndex) else { return }
         // Protected items and undecodable items (which must never be auto-deleted)
         // cannot be marked for deletion via this toggle.
-        if itemIndex < groups[i].items.count,
-           groups[i].items[itemIndex].isProtected || groups[i].qualities[itemIndex].isUndecodable {
+        if groups[i].items[itemIndex].isProtected || groups[i].qualities[itemIndex].isUndecodable {
             return
         }
         if groups[i].keptIndices.contains(itemIndex) {
@@ -475,69 +634,111 @@ final class ReviewViewModel: ObservableObject {
         }
     }
 
-    func deleteGroup(groupID: UUID) async {
-        guard !isDeleting else { return }
-        isDeleting = true
-        // NOTE: no function-scope defer here — this function returns before the
-        // DispatchQueue.main.async block below runs its @Published mutations, so
-        // the flag must survive past the return. Every synchronous early-return
-        // path clears it explicitly; the deferred block clears it via its own
-        // defer (covering both its internal guard-fail and normal completion).
-        guard let idx = groups.firstIndex(where: { $0.id == groupID }) else { isDeleting = false; return }
-        let toDelete = groups[idx].itemsToDelete
-        let groupSnapshot = groups[idx]  // capture before await; groups may mutate during suspension
-        let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
-
-        let receipt: DeletionReceipt?
-        do {
-            if !toDelete.isEmpty {
-                receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
-            } else {
-                receipt = nil
-            }
-        } catch {
-            isDeleting = false
-            DispatchQueue.main.async { [weak self] in
-                self?.scanState = .error(error.localizedDescription)
-            }
-            return
-        }
-
-        // Defer every @Published write to a fresh runloop tick. Resuming from
-        // the `await` above can land while SwiftUI is mid-update (the
-        // confirmation dialog is still dismissing, or a prior write here
-        // would kick off `.animation(value: hasActiveUndo)` on ReviewView
-        // and immediately re-enter view evaluation). Mutating @Published
-        // properties in that window trips "Publishing changes from within
-        // view updates". Reassign selection BEFORE removing the group so the
-        // sidebar List's two-way binding never observes a missing selected ID.
-        if receipt != nil {
-            logDeletions(toDelete, in: groupSnapshot)
-        }
+    /// Stages a group for deletion — a pure local state move, no PhotoKit or
+    /// file I/O.
+    ///
+    /// Why staging exists: deleting Photos-library assets triggers an
+    /// unavoidable macOS system prompt ("Allow PhotoDeduper to delete N
+    /// photos?") PER PhotoKit request. When the per-group action fired its own
+    /// delete request, a 40-group review session meant 40 prompts. Staging
+    /// makes the per-group action instant and prompt-free; the toolbar's
+    /// single "Delete N Photos" flush (`confirmDelete`) then removes
+    /// everything in ONE PhotoKit request — one system prompt per session.
+    func stageGroup(groupID: UUID) {
+        // Defer the @Published mutations to a fresh runloop tick: this is
+        // reachable from an onKeyPress handler (`d`), which can fire while
+        // SwiftUI is mid view-update — a synchronous write here trips
+        // "Publishing changes from within view updates" (same rationale as
+        // `selectGroup(offset:)`). The groupID lookup also happens inside the
+        // block so a double-tap of `d` finds the group already gone and no-ops.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            // Clear the re-entry guard here, at the end of the deferred work —
-            // not at function scope, which would fire before this block runs.
-            // A defer covers both the internal `guard let currentIdx` early
-            // return and the normal completion path exactly once. (If self is
-            // nil the object is deallocating, so the flag is moot.)
-            defer { self.isDeleting = false }
-            if let receipt, !receipt.trashedAssetIDs.isEmpty {
-                self.lastReceipt = receipt
-                self.scheduleUndoExpiry(seconds: 30)
-            }
-            guard let currentIdx = self.groups.firstIndex(where: { $0.id == groupID }) else { return }
-            if self.groups[currentIdx].id == self.selectedGroupID {
-                if currentIdx + 1 < self.groups.count {
-                    self.selectedGroupID = self.groups[currentIdx + 1].id
-                } else if currentIdx > 0 {
-                    self.selectedGroupID = self.groups[currentIdx - 1].id
+            // A stage block enqueued just before a flush completes could drain
+            // after `confirmDelete` already cleared both collections — ignore
+            // it once the session has left review, so a deleted group can't be
+            // resurrected into `stagedGroups` as a stale ghost.
+            guard case .reviewing = self.scanState else { return }
+            guard let idx = self.groups.firstIndex(where: { $0.id == groupID }) else { return }
+            // Reassign selection BEFORE removing the group (next, else
+            // previous, else nil) so the sidebar List's two-way binding never
+            // observes a missing selected ID.
+            if self.groups[idx].id == self.selectedGroupID {
+                if idx + 1 < self.groups.count {
+                    self.selectedGroupID = self.groups[idx + 1].id
+                } else if idx > 0 {
+                    self.selectedGroupID = self.groups[idx - 1].id
                 } else {
                     self.selectedGroupID = nil
                 }
             }
-            self.groups.remove(at: currentIdx)
+            self.stagedGroups.append(self.groups.remove(at: idx))
         }
+    }
+
+    /// Stages EVERY remaining live group in one shot (the toolbar "Set Aside
+    /// All" action) — the bulk counterpart to per-group `stageGroup`. For a
+    /// user who trusts the proposed keepers across many groups, walking them
+    /// one `d` at a time is pure friction; this empties the live list into
+    /// `stagedGroups` so they can flush the whole session with a single
+    /// "Delete N Photos". Still a pure local state move: like `stageGroup`,
+    /// nothing touches PhotoKit or the file system until `confirmDelete`.
+    func stageAllGroups() {
+        // No live groups ⟹ nothing to stage. Guard up front so the deferred
+        // block below can't fire a redundant @Published write (which would
+        // still publish and nudge SwiftUI) on an already-empty list.
+        guard !groups.isEmpty else { return }
+        // Defer the @Published mutations to a fresh runloop tick, exactly as
+        // `stageGroup`/`selectGroup(offset:)` do: this is reachable from a
+        // toolbar button during a view update, and a synchronous write trips
+        // "Publishing changes from within view updates". Re-checking inside the
+        // block also makes a double-invocation (rapid double-click) find the
+        // groups already drained and no-op.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            // Same late-flush guard as `stageGroup`: a stage-all enqueued just
+            // before a flush completes must not resurrect groups into
+            // `stagedGroups` after `confirmDelete` already cleared everything.
+            guard case .reviewing = self.scanState else { return }
+            guard !self.groups.isEmpty else { return }
+            // No live groups remain selectable once the list is emptied, so
+            // clear the selection (the sidebar List binding would otherwise
+            // point at a now-missing ID) — mirrors the nil-selection branch in
+            // `stageGroup`.
+            self.selectedGroupID = nil
+            self.stagedGroups.append(contentsOf: self.groups)
+            self.groups = []
+        }
+    }
+
+    /// Moves every staged group back into the live review list (the sidebar's
+    /// "Restore" action). Appending at the end is deliberate: the user already
+    /// reviewed past these groups, so they shouldn't displace the current
+    /// position in the list.
+    func restoreStagedGroups() {
+        guard !stagedGroups.isEmpty else { return }
+        let restored = stagedGroups
+        stagedGroups = []
+        groups.append(contentsOf: restored)
+        // Only adopt a selection when there is none (every live group was
+        // staged); otherwise leave the user's current position alone.
+        if selectedGroupID == nil { selectedGroupID = restored.first?.id }
+    }
+
+    /// Re-runs the SAME scan the current results came from, so a mid-review
+    /// settings change actually takes effect. Triggered by the "Rescan" button
+    /// on the `pendingRescan` banner.
+    ///
+    /// The scan-affecting settings (timeWindow, pHashThreshold,
+    /// closeCallThreshold, scanVideosToo, protectedAlbumIDs) are read fresh at
+    /// the top of `runPipeline` / each entry point, so simply replaying
+    /// `lastScanAction` re-applies whatever the user just saved — no values are
+    /// threaded through here. Clearing `pendingRescan` first hides the banner
+    /// immediately; the entry point then drives `scanState` through `.scanning`
+    /// (ContentView swaps in the progress view), so the stale review results
+    /// are torn down by the normal pipeline reset, not by us.
+    func rescan() {
+        pendingRescan = false
+        lastScanAction?()
     }
 
     func confirmDelete() async {
@@ -547,42 +748,140 @@ final class ReviewViewModel: ObservableObject {
         // safe here — it fires on every exit (success or catch). Placed after
         // the guard so a blocked re-entry can't clear the in-flight call's flag.
         defer { isDeleting = false }
-        let toDeleteByGroup = groups.map { ($0, $0.itemsToDelete) }
+        // Flush staged groups AND the remaining live groups in ONE
+        // BatchDeleteManager call — the whole point of the staging model:
+        // a single PhotoKit request means a single macOS "Allow PhotoDeduper
+        // to delete N photos?" prompt for the entire session, instead of one
+        // per group. Kept/deleted counts must span both collections too.
+        let flushGroups = groups + stagedGroups
+        let toDeleteByGroup = flushGroups.map { ($0, $0.itemsToDelete) }
         let toDelete = toDeleteByGroup.flatMap(\.1)
         let deletedCount = toDelete.count
-        let freed = estimatedFreedBytes
-        let keptCount = groups.reduce(0) { $0 + $1.keptIndices.count }
+        let keptCount = flushGroups.reduce(0) { $0 + $1.keptIndices.count }
         let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
 
         do {
             let receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
-            // Only show the undo banner when assets were actually trashed.
-            // In holdForReview mode trashedAssetIDs is empty — the banner would
-            // be misleading (nothing is in Recently Deleted to recover).
-            if !receipt.trashedAssetIDs.isEmpty {
-                self.lastReceipt = receipt
-                self.scheduleUndoExpiry(seconds: 30)
+            if let message = receipt.allFailedMessage {
+                // Total failure: nothing was deleted; surface it like a throw.
+                scanState = .error(message)
+                return
             }
-            for (group, items) in toDeleteByGroup where !items.isEmpty {
-                logDeletions(items, in: group)
+            // Only show the undo banner when something was actually trashed.
+            // In holdForReview mode for library scans both are empty — the
+            // banner would be misleading (nothing to recover or put back).
+            if !receipt.trashedAssetIDs.isEmpty || !receipt.trashedFiles.isEmpty {
+                // Merge with any still-active previous receipt so its Trash
+                // undo handles survive — see `absorbing`'s doc comment.
+                self.lastReceipt = receipt.absorbing(self.hasActiveUndo ? self.lastReceipt : nil)
+                // 120s, not 30s: the old window was too short for a user to read
+                // the banner and react before it self-hid. The receipt stays
+                // actionable far longer (files in Trash / assets in Recently
+                // Deleted, both 30 days) — this timer only governs the in-review
+                // *banner*; DoneView's Undo button keys off `lastReceipt`
+                // directly (see `canUndoLastDelete`) so it never expires here.
+                self.scheduleUndoExpiry(seconds: 120)
             }
-            scanState = .done(keptCount: keptCount, deletedCount: deletedCount, freedBytes: freed)
+            // Only audit-log items that actually left the library/disk. The
+            // same pass totals the bytes genuinely freed: the up-front
+            // `estimatedFreedBytes` counts ALL candidates and would overstate
+            // the "Space freed" stat when some files failed to trash. (With
+            // zero failures `succeededItems` returns every item, so this sum
+            // equals the old estimate.)
+            var freedBytes: Int64 = 0
+            for (group, items) in toDeleteByGroup {
+                let succeeded = succeededItems(items, receipt: receipt)
+                if !succeeded.isEmpty { logDeletions(succeeded, in: group) }
+                freedBytes += succeeded.reduce(Int64(0)) { $0 + $1.estimatedByteSize }
+            }
+            // Stash the failure count for DoneView's warning line BEFORE the
+            // state flips to .done, so the very first render sees it.
+            lastDeleteFailedCount = receipt.failedCount
+            // The flush consumed the staged set — clear it even on PARTIAL
+            // failure: each staged photo either got deleted or is counted in
+            // `failedCount` (surfaced as DoneView's warning line). Resurrecting
+            // just the failed photos' staged groups would mean index surgery
+            // across PhotoGroup's parallel arrays (items/scores/qualities/
+            // keptIndices) for an already-rare partial-trash failure — not
+            // worth it. Total failure returns above with both collections
+            // intact, as does the catch below.
+            stagedGroups = []
+            // Count math: items whose files were already gone (trashed by an
+            // earlier partial attempt, silently skipped this pass) appear in
+            // `deletedCount` but in neither the receipt's successes nor
+            // `failedCount` — they're reported as deleted, which is accurate
+            // (they ARE off the disk), while `freedBytes` above credits them
+            // to the attempt that actually trashed them. `failedCount` never
+            // exceeds the files attempted, so this can't go negative.
+            scanState = .done(keptCount: keptCount, deletedCount: deletedCount - receipt.failedCount, freedBytes: freedBytes)
         } catch {
             scanState = .error(error.localizedDescription)
         }
     }
 
-    /// Opens Photos to Recently Deleted so the user can recover. Apple does
-    /// not expose a programmatic restore API for already-deleted assets, so
-    /// this is a navigation shortcut, not a true rollback.
+    /// Filters `items` down to those the receipt confirms were deleted or
+    /// staged. File items use `url.absoluteString` as their PhotoItem id —
+    /// the same key `logDeletions` records as `photoID` — so matching is exact.
+    ///
+    /// Always filters by the receipt's contents, even with zero failures:
+    /// `trashFiles` silently skips files whose originals are already gone
+    /// (the retry-after-partial-failure case), so "no failures" no longer
+    /// implies "every submitted item succeeded". Those skipped items were
+    /// audit-logged and byte-counted by the attempt that actually trashed
+    /// them; including them again here would double-log and overstate
+    /// freed bytes.
+    private func succeededItems(_ items: [PhotoItem], receipt: DeletionReceipt) -> [PhotoItem] {
+        var ids = Set(receipt.trashedAssetIDs)
+        ids.formUnion(receipt.stagedAssetIDs)
+        ids.formUnion(receipt.trashedFiles.map { $0.originalURL.absoluteString })
+        return items.filter { ids.contains($0.id) }
+    }
+
+    /// Undoes the last deletion as far as each source allows.
+    ///
+    /// - File deletions: moves files back from the Trash to their original
+    ///   locations (a true programmatic undo, best-effort per file).
+    /// - Library assets: opens Photos to Recently Deleted so the user can
+    ///   recover. Apple does not expose a programmatic restore API for
+    ///   already-deleted assets, so this part is a navigation shortcut, not a
+    ///   true rollback.
+    ///
+    /// A mixed receipt does both. Restored file groups are NOT re-inserted
+    /// into `groups` — the banner state is simply cleared, matching the
+    /// existing Photos-assets behaviour.
     func attemptUndo() async {
         guard let receipt = lastReceipt else { return }
-        _ = await BatchDeleteManager.restoreFromRecentlyDeleted(assetIDs: receipt.trashedAssetIDs)
+        var restoredPhotoIDs: Set<String> = []
+        // Track the file-restore outcome: Trash restores genuinely fail when
+        // the Trash was emptied or the original path is occupied again, and
+        // silently clearing the banner would leave the user believing their
+        // files came back.
+        let requestedFiles = receipt.trashedFiles.count
+        var restoredFiles = 0
+        if !receipt.trashedFiles.isEmpty {
+            let restored = BatchDeleteManager.restoreTrashedFiles(receipt.trashedFiles, folderScope: scannedFolderURL)
+            restoredFiles = restored.count
+            restoredPhotoIDs.formUnion(restored.map { $0.originalURL.absoluteString })
+        }
+        if !receipt.trashedAssetIDs.isEmpty {
+            _ = await BatchDeleteManager.restoreFromRecentlyDeleted(assetIDs: receipt.trashedAssetIDs)
+            restoredPhotoIDs.formUnion(receipt.trashedAssetIDs)
+        }
         var ids: Set<UUID> = []
         for entry in AuditLogger.shared.sessionEntries(since: sessionStart) {
-            if receipt.trashedAssetIDs.contains(entry.photoID) { ids.insert(entry.id) }
+            if restoredPhotoIDs.contains(entry.photoID) { ids.insert(entry.id) }
         }
         if !ids.isEmpty { AuditLogger.shared.markRestored(ids: ids) }
+        // Surface restore shortfalls, but clear the banner regardless: the
+        // files that didn't come back are gone from the Trash (or blocked at
+        // their original path), so offering a retry would be pointless.
+        if requestedFiles > 0 {
+            if restoredFiles == 0 {
+                showTransientNotice("Couldn't restore — files are no longer in the Trash.")
+            } else if restoredFiles < requestedFiles {
+                showTransientNotice("Restored \(restoredFiles) of \(requestedFiles) files.")
+            }
+        }
         lastReceipt = nil
         undoBannerExpiresAt = nil
     }
@@ -612,12 +911,55 @@ final class ReviewViewModel: ObservableObject {
         }
     }
 
+    /// Shows a short-lived, non-blocking message and schedules its removal —
+    /// the `scheduleUndoExpiry` pattern applied to text: SwiftUI won't clear
+    /// the notice on its own, so a task nils it out after the window. Showing
+    /// a new notice cancels the previous clear task so the fresh message
+    /// always gets its full display window.
+    private func showTransientNotice(_ message: String, seconds: TimeInterval = 6) {
+        transientNoticeTask?.cancel()
+        transientNotice = message
+        transientNoticeTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            await MainActor.run { [weak self] in
+                guard let self, !Task.isCancelled else { return }
+                self.transientNotice = nil
+                self.transientNoticeTask = nil
+            }
+        }
+    }
+
+    /// Clears the transient notice immediately and cancels its pending
+    /// auto-clear task — the manual-dismiss counterpart to `dismissUndoBanner`.
+    /// Users reported the ~6s auto-clear yanked the message before they finished
+    /// reading; the "X" on the notice banner calls this so they can dismiss on
+    /// their own time. Cancelling the task matters: otherwise a later fire of
+    /// the in-flight `transientNoticeTask` would nil out a *fresh* notice early.
+    func dismissTransientNotice() {
+        transientNotice = nil
+        transientNoticeTask?.cancel()
+        transientNoticeTask = nil
+    }
+
     func reset() {
         groups          = []
+        stagedGroups    = []
         selectedGroupID = nil
         scanState       = .idle
         lastReceipt     = nil
         undoBannerExpiresAt = nil
+        transientNotice = nil
+        transientNoticeTask?.cancel()
+        transientNoticeTask = nil
+        lastDeleteFailedCount = 0
+        // Drop any pending "Settings changed" prompt so the next session never
+        // inherits a stale rescan offer from the one just torn down.
+        pendingRescan = false
+        // Forget how to replay the just-finished scan — leaving this set would let
+        // a future "repeat last scan" affordance re-scan a scope (album/folder/
+        // picked set) the user has mentally left behind, and re-open a stale
+        // security-scoped folder URL from the closure rather than a live bookmark.
+        lastScanAction = nil
         ThumbnailCache.shared.stopAll()
     }
 

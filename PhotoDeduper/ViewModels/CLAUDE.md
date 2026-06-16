@@ -31,8 +31,19 @@ idle → scanning(progress, message) → reviewing / error(message)
 | `startFolderScan(url:)` | Scan a local folder |
 | `selectKeeper(groupID:itemIndex:)` | User picks the keeper for a group |
 | `toggleKeep(groupID:itemIndex:)` | Toggle an individual photo in/out of the keep set |
-| `confirmDelete()` | Execute deletion via `BatchDeleteManager` |
+| `stageGroup(groupID:)` | Move a group from `groups` to `stagedGroups` — local only, no PhotoKit/file I/O (`d` key, "Stage N" button) |
+| `restoreStagedGroups()` | Move all staged groups back into `groups` (sidebar "Restore") |
+| `confirmDelete()` | Flush staged + remaining groups in ONE `BatchDeleteManager` call → one macOS delete prompt per session |
 | `reset()` | Return to idle |
+
+#### Staging model ("mark, then flush")
+
+Per-group actions only *stage* groups into `stagedGroups`; nothing is deleted
+until `confirmDelete()` flushes everything in a single PhotoKit request. This
+keeps the unavoidable macOS "Allow PhotoDeduper to delete N photos?" prompt to
+one per session instead of one per group. `totalToDelete` /
+`estimatedFreedBytes` span both collections; `reset()`, `cancelScan()`, and a
+new scan clear `stagedGroups`.
 
 #### Scan pipeline (`runPipeline`)
 

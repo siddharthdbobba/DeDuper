@@ -14,7 +14,10 @@ struct ConfirmDeleteSheet: View {
                 .font(.system(size: 64))
                 .foregroundStyle(isHoldForReview ? .blue : .red)
 
-            Text(isHoldForReview ? "Stage for Review" : "Confirm Deletion")
+            // "Move to Review Album" (not "Stage") so this hold-for-review flow —
+            // which copies photos into a Photos album for manual auditing — doesn't
+            // collide with the app's local "Set Aside" staging vocabulary.
+            Text(isHoldForReview ? "Move to Review Album" : "Confirm Deletion")
                 .font(.title2.bold())
 
             statsGrid
@@ -36,7 +39,7 @@ struct ConfirmDeleteSheet: View {
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
 
-                Button(isHoldForReview ? "Stage \(viewModel.totalToDelete) Photos" : "Delete \(viewModel.totalToDelete) Photos") {
+                Button(isHoldForReview ? "Move \(viewModel.totalToDelete) to Review Album" : "Delete \(viewModel.totalToDelete) Photos") {
                     dismiss()
                     Task { await viewModel.confirmDelete() }
                 }
@@ -53,7 +56,10 @@ struct ConfirmDeleteSheet: View {
         VStack(spacing: 0) {
             statRow("Photos to delete", "\(viewModel.totalToDelete)")
             Divider()
-            statRow("Groups to keep", "\(viewModel.groups.count)")
+            // Staged groups keep their keepers too — the flush only deletes
+            // each group's itemsToDelete — so they count as kept groups here.
+            // (totalToDelete / estimatedFreedBytes already span both sets.)
+            statRow("Groups to keep", "\(viewModel.groups.count + viewModel.stagedGroups.count)")
             Divider()
             statRow(
                 "Estimated space freed",

@@ -8,6 +8,12 @@ struct PhotoCard: View {
     let score: Double
     let isKeeper: Bool
     let onTap: () -> Void
+    /// Optional alternate action for a modifier-held tap (macOS ⌘-click). When
+    /// set, the grid uses plain tap = "make this the sole keeper" and ⌘-click =
+    /// "toggle this in/out of the keeper set" (the multi-keep power feature),
+    /// keeping the dominant keep-one-delete-the-rest gesture honest with the copy
+    /// while preserving multi-select. Falls back to `onTap` when nil.
+    var onModifierTap: (() -> Void)? = nil
     var onDoubleTap: (() -> Void)? = nil
 
     var body: some View {
@@ -20,16 +26,10 @@ struct PhotoCard: View {
             .aspectRatio(item.aspectRatio, contentMode: .fit)
             // ── Image + dim effect (all clipped together to the rounded rect) ──
             .overlay {
-                ZStack {
-                    PhotoThumbnail(item: item, fullQuality: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // Dim deletion candidates so the keeper visually wins at a
-                    // glance. Must live inside this overlay so clipShape below
-                    // correctly masks its corners (not just the thumbnail).
-                    if !isKeeper {
-                        Color.black.opacity(0.32)
-                    }
-                }
+                // Deletion candidates are marked by the red border + DELETE badge
+                // alone — no dimming overlay, so the photo stays fully inspectable.
+                PhotoThumbnail(item: item, displayQuality: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .clipShape(RoundedRectangle(cornerRadius: 10))
             // ── Decorations (outside the clip so they render on the boundary) ──
@@ -46,7 +46,28 @@ struct PhotoCard: View {
             .shadow(color: isKeeper ? .green.opacity(0.30) : .clear, radius: 8)
             .scaleEffect(isKeeper ? 1.0 : 0.97)
             .animation(.easeOut(duration: 0.15), value: isKeeper)
+            // Gesture precedence is load-bearing here. The ⌘-modified TapGesture
+            // uses `.highPriorityGesture` so that when ⌘ is held it WINS outright
+            // and the plain `.onTapGesture` below does NOT also fire — otherwise a
+            // ⌘-click would run both `onModifierTap` (toggle) AND `onTap` (collapse
+            // to sole keeper), silently defeating multi-keep. With ⌘ up the modified
+            // gesture can't match (`.modifiers(.command)`), so the plain tap is the
+            // sole behavior and still fires `onTap`. On platforms without ⌘ (iOS)
+            // the modified gesture never matches, leaving plain tap as the only path.
+            .highPriorityGesture(TapGesture().modifiers(.command).onEnded { (onModifierTap ?? onTap)() })
             .onTapGesture { onTap() }
+            // VoiceOver: collapse the tile (image + stacked badges + zoom button)
+            // into ONE element so a screen reader announces a single coherent
+            // "Photo to keep, 87 percent, tap to keep this one" instead of reading
+            // each decorative badge as a separate, contextless control. The label
+            // leads with the decision the user cares about (keep / delete /
+            // protected — the same three-way the border + statusBadge encode
+            // visually), the value carries the quality score sighted users read
+            // off scoreBadge, and the hint states the dominant plain-tap action.
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(item.isProtected ? "Protected photo" : (isKeeper ? "Photo to keep" : "Photo to delete"))
+            .accessibilityValue("Quality score \(String(format: "%.0f", score * 100)) percent")
+            .accessibilityHint("Tap to keep this one and remove the others")
     }
 
     private var borderColor: Color {
@@ -107,24 +128,45 @@ struct PhotoCard: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
-        .background(.black.opacity(0.55))
+        // 0.72 (was 0.55): over a bright, blown-out photo the thinner scrim let
+        // the white "XX.X%" wash out and fail contrast. The darker fill keeps the
+        // percent legible on any background without making the capsule look opaque.
+        .background(.black.opacity(0.72))
         .foregroundStyle(.white)
         .clipShape(Capsule())
         .padding(8)
+        // The "XX.X%" reads as a mystery number without this — a star + percent
+        // looks like a rating but says nothing about what's being rated or why
+        // one photo got picked over its near-identical neighbor. Spell out the
+        // inputs (the same signals PhotoScorer weighs) AND the consequence (it
+        // drives the default keeper) so a hover answers both "what is this?" and
+        // "why does it matter?".
+        .help("Quality score — sharpness, exposure, and composition. Higher is better; the app keeps the highest-scoring photo by default.")
     }
 
     private var zoomButton: some View {
         Button { onDoubleTap?() } label: {
+            // The glyph itself stays small (~20pt) so it sits unobtrusively in the
+            // corner, but the tappable region is expanded to the 44pt minimum:
+            // a min 44×44 frame + .contentShape(Rectangle()) makes the whole
+            // square hit-test, not just the tiny visible circle. .topTrailing
+            // pins the small glyph to the corner of that larger frame so the card
+            // doesn't visually balloon — only the touch target grows.
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.caption2)
                 .padding(5)
                 .background(.black.opacity(0.45))
                 .foregroundStyle(.white)
                 .clipShape(Circle())
+                .frame(minWidth: 44, minHeight: 44, alignment: .topTrailing)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .padding(8)
         .help("View full size")
+        // .help is a hover tooltip only — VoiceOver never reads it, so without
+        // this the icon-only button announces as "button" with no purpose.
+        .accessibilityLabel("View full size")
     }
 }
 
@@ -137,13 +179,22 @@ struct PhotoThumbnail: View {
     /// `.fill` crops to fill a fixed frame — used in compact sidebar thumbnails
     /// (GroupRow) where a 52×52 square looks better than a letterboxed image.
     var contentMode: ContentMode = .fit
-    /// When true, loads the full-resolution original instead of a downsized
-    /// thumbnail. Used by the review grid (`PhotoCard`) so the user inspects each
-    /// candidate at full quality before deciding which copy to keep. The compact
-    /// sidebar thumbnails (`GroupRow`) leave this off to stay on the fast path.
-    var fullQuality: Bool = false
+    /// When true, loads a crisp display-resolution image (~1400 px) instead of the
+    /// small 400/600 px compact thumbnail. Used by the review grid (`PhotoCard`) so
+    /// each candidate is sharp enough to judge at a glance. It deliberately does NOT
+    /// decode the full-resolution original — that made the grid slow; true full-res
+    /// inspection lives in the lightbox. The compact sidebar thumbnails (`GroupRow`)
+    /// leave this off to stay on the smallest/fastest path.
+    var displayQuality: Bool = false
     @State private var image: PlatformImage?
     @State private var requestID: PHImageRequestID?
+    /// The item id the most recent load was started for. Used to drop stale
+    /// completions: comparing against `self.item.id` inside a completion closure
+    /// would be useless — the closure captures this view struct BY VALUE, so that
+    /// read is frozen at request time and always matches. @State storage, by
+    /// contrast, is shared across all copies of the view for the same identity,
+    /// so reading it in the closure sees the CURRENT value.
+    @State private var loadedForID: String?
 
     var body: some View {
         Group {
@@ -171,15 +222,25 @@ struct PhotoThumbnail: View {
             }
         }
         .onAppear(perform: load)
-        .onDisappear {
-            if let id = requestID {
-                ThumbnailCache.shared.cancelRequest(id)
-                requestID = nil
-            }
+        .onChange(of: item.id) {
+            // A reused cell (e.g. LazyVGrid recycling) whose item changed must
+            // drop the in-flight request and reload for the new item.
+            cancelInFlightRequest()
+            image = nil
+            load()
+        }
+        .onDisappear(perform: cancelInFlightRequest)
+    }
+
+    private func cancelInFlightRequest() {
+        if let id = requestID {
+            ThumbnailCache.shared.cancelRequest(id)
+            requestID = nil
         }
     }
 
     private func load() {
+        loadedForID = item.id
         switch item.source {
         case .asset(let asset):
             loadFromAsset(asset)
@@ -193,50 +254,64 @@ struct PhotoThumbnail: View {
     }
 
     private func loadFromAsset(_ asset: PHAsset) {
+        // PHImageManager's opportunistic delivery calls this handler multiple
+        // times (degraded → final), and a late callback can land after the cell
+        // was recycled for a different item. Compare the id captured at request
+        // time against `loadedForID` (see its doc comment for why `self.item.id`
+        // can't serve as the "current" side of this check).
+        let requestedID = item.id
         let handler: (PlatformImage?) -> Void = { image in
             if let image {
-                Task { @MainActor in self.image = image }
+                Task { @MainActor in
+                    guard loadedForID == requestedID else { return } // stale callback
+                    self.image = image
+                }
             }
         }
-        requestID = fullQuality
-            ? ThumbnailCache.shared.requestFullImage(for: asset, completion: handler)
+        requestID = displayQuality
+            ? ThumbnailCache.shared.requestDisplayImage(for: asset, completion: handler)
             : ThumbnailCache.shared.requestImage(for: asset, completion: handler)
     }
 
     private func loadFromFileURL(_ url: URL) {
+        // Downsample directly off the image source. For the grid we cap at ~1400 px
+        // (sharp on retina) instead of fully decoding the original file — a full
+        // decode of a 24 MP JPEG/HEIC per card was the folder-scan equivalent of the
+        // slow asset path. ImageIO downsampling decodes only what it needs.
+        let maxPixel: CGFloat = displayQuality ? 1400 : 400
+        let requestedID = item.id
         Task.detached(priority: .userInitiated) {
             _ = url.startAccessingSecurityScopedResource()
             defer { url.stopAccessingSecurityScopedResource() }
 
-            // Full-quality grid: decode the original file at native resolution.
-            if fullQuality {
-                if let img = PlatformImage(contentsOfFile: url.path) {
-                    await MainActor.run { self.image = img }
-                }
-                return
-            }
-
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
             let opts: [CFString: Any] = [
-                kCGImageSourceThumbnailMaxPixelSize: 400,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixel,
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true
             ]
             guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return }
             let img = PlatformImage.from(cgImage: cg)
-            await MainActor.run { self.image = img }
+            await MainActor.run {
+                guard loadedForID == requestedID else { return } // stale: cell was reused
+                self.image = img
+            }
         }
     }
 
     private func loadVideoThumbnail(_ url: URL) {
-        // Videos have no still "original"; a larger keyframe keeps the full-quality
-        // grid crisp, while the compact path stays small.
-        let side: CGFloat = fullQuality ? 1600 : 800
+        // Videos have no still "original"; a larger keyframe keeps the review grid
+        // crisp, while the compact path stays small.
+        let side: CGFloat = displayQuality ? 1400 : 800
+        let requestedID = item.id
         Task.detached(priority: .userInitiated) {
             let item = await PhotoLibraryManager.loadThumbnail(for: PhotoItem.from(url: url), size: CGSize(width: side, height: side))
             guard let cg = item else { return }
             let img = PlatformImage.from(cgImage: cg)
-            await MainActor.run { self.image = img }
+            await MainActor.run {
+                guard loadedForID == requestedID else { return } // stale: cell was reused
+                self.image = img
+            }
         }
     }
 }

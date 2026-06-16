@@ -28,9 +28,38 @@ struct DoneView: View {
 
             statsCard
 
+            if viewModel.lastDeleteFailedCount > 0 {
+                // Partial-failure accounting: the stats above only count what
+                // actually left the disk/library; this row owns the remainder
+                // so failed files don't silently disappear from the summary.
+                // Promoted from a thin one-liner to a tinted warning row (icon
+                // + bolder text in an orange card): a user scrolling the success
+                // stats was missing the small line, so "N files couldn't be
+                // deleted" now reads as a clear, can't-miss warning.
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.orange)
+                    Text("\(viewModel.lastDeleteFailedCount) file\(viewModel.lastDeleteFailedCount == 1 ? "" : "s") couldn't be deleted")
+                        .font(.callout.bold())
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: 380)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10).stroke(Color.orange.opacity(0.35), lineWidth: 1)
+                )
+            }
+
             Text(isHoldForReview
                  ? "Open Photos to audit the staged album; remove from there when you're ready."
-                 : "Deleted photos are in **Recently Deleted** and can be recovered for 30 days.")
+                 : (viewModel.isFolderScan
+                    ? "Deleted photos are in the **macOS Trash**."
+                    : "Deleted photos are in **Recently Deleted** and can be recovered for 30 days."))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -42,17 +71,43 @@ struct DoneView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+                // Return goes Home (not Undo) — undoing a delete should stay a
+                // deliberate click, never an accidental keypress.
+                .keyboardShortcut(.defaultAction)
 
-                if viewModel.lastReceipt != nil {
+                // Gate on `canUndoLastDelete` (≡ lastReceipt != nil), NOT the
+                // in-review banner's `hasActiveUndo` countdown: a user sitting
+                // on this success screen should be able to undo for as long as
+                // the receipt is actionable (files still in Trash / assets in
+                // Recently Deleted), without a hidden 120s timer pulling the
+                // button out from under them.
+                if viewModel.canUndoLastDelete {
                     Button {
                         Task { await viewModel.attemptUndo() }
                     } label: {
-                        Label("Open Photos", systemImage: "arrow.uturn.backward")
+                        // "Recover in Photos" (not "Open Photos"): library-only
+                        // deletes open Recently Deleted FOR recovery — see the
+                        // matching rationale on ReviewView's undo banner. File/
+                        // mixed receipts are a real put-back, so they read "Undo".
+                        Label(viewModel.lastReceiptHasFileDeletions ? "Undo" : "Recover in Photos",
+                              systemImage: "arrow.uturn.backward")
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .help("Opens Photos so you can confirm and recover from Recently Deleted")
+                    .help(viewModel.lastReceiptHasFileDeletions
+                          ? "Puts the photos back where they were."
+                          : "Opens Recently Deleted in Photos, where you can restore them.")
                 }
+            }
+
+            if let notice = viewModel.transientNotice {
+                // Undo outcomes (e.g. "files are no longer in the Trash") must
+                // surface here too — the Undo button above can fail after the
+                // review screen (and its toast) is already gone.
+                Text(notice)
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
             }
 
             Spacer()
