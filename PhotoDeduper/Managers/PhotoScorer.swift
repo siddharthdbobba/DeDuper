@@ -28,17 +28,44 @@ class PhotoScorer {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// Returns one `PhotoQuality` per item, in the same order.
-    func evaluateGroup(_ items: [PhotoItem]) async -> [PhotoQuality] {
-        var results: [PhotoQuality] = []
-        results.reserveCapacity(items.count)
-        for item in items {
-            if Task.isCancelled {
-                results.append(.zero)
-                continue
+    ///
+    /// Concurrency is bounded to `maxConcurrent` evaluations in flight. Each
+    /// evaluation decodes a thumbnail and runs Core Image + two Vision passes, so
+    /// an unbounded fan-out on a large group (e.g. a big near-duplicate cluster)
+    /// spawned hundreds of these at once — thrashing memory and oversubscribing
+    /// the GPU/Vision queues until throughput collapsed. `onItemScored` fires once
+    /// per completed item so callers can report item-level progress.
+    func evaluateGroup(
+        _ items: [PhotoItem],
+        maxConcurrent: Int = 4,
+        onItemScored: (@Sendable () -> Void)? = nil
+    ) async -> [PhotoQuality] {
+        await withTaskGroup(of: (Int, PhotoQuality).self) { group in
+            let limit = max(1, min(maxConcurrent, items.count))
+            var next = 0
+            // Seed the group with up to `limit` concurrent evaluations.
+            while next < limit {
+                let index = next
+                let item = items[index]
+                group.addTask { (index, await self.evaluate(item)) }
+                next += 1
             }
-            results.append(await evaluate(item))
+            var results = [(Int, PhotoQuality)]()
+            results.reserveCapacity(items.count)
+            // As each finishes, report progress and enqueue the next item so no
+            // more than `limit` evaluations ever run at once.
+            for await result in group {
+                results.append(result)
+                onItemScored?()
+                if next < items.count {
+                    let index = next
+                    let item = items[index]
+                    group.addTask { (index, await self.evaluate(item)) }
+                    next += 1
+                }
+            }
+            return results.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
-        return results
     }
 
     func evaluate(_ item: PhotoItem) async -> PhotoQuality {
@@ -75,7 +102,7 @@ class PhotoScorer {
         }
 
         guard let cgImage = await PhotoLibraryManager.loadThumbnail(
-            for: item, size: CGSize(width: 800, height: 800)
+            for: item, size: CGSize(width: 512, height: 512)
         ) else {
             // Couldn't load/decode (corrupt, or an iCloud asset not downloaded at
             // scan time) — flag undecodable so runPipeline never auto-deletes it.

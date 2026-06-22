@@ -124,6 +124,10 @@ final class ReviewViewModel: ObservableObject {
     /// Circular buffer of (elapsed seconds, progress) samples used by `computeETA`.
     /// Cleared automatically whenever `scanStartTime` is reset (new scan start or cancel).
     private var etaSamples: [(elapsed: Double, progress: Double)] = []
+    /// Count of individual photos scored so far in the current scan's scoring
+    /// phase. Drives item-level scoring progress so a single large group doesn't
+    /// freeze the bar. Reset to 0 at the start of the scoring loop.
+    private var scoredItemCount = 0
     /// Task that clears the undo banner once its 30-second window elapses.
     /// SwiftUI doesn't re-evaluate `hasActiveUndo` on its own; a timer is
     /// required to nil out `undoBannerExpiresAt` and trigger a view update.
@@ -451,9 +455,15 @@ final class ReviewViewModel: ObservableObject {
         // the user sees groups appear progressively (the chunked-scan UX).
         let scorer = PhotoScorer()
         groups = []
-        for (i, (group, origin)) in allGroups.enumerated() {
+        // Drive the scoring progress band off items scored (not groups completed)
+        // so a single large group still advances the bar instead of looking frozen.
+        let totalItemsToScore = allGroups.reduce(0) { $0 + $1.0.count }
+        scoredItemCount = 0
+        for (group, origin) in allGroups {
             if Task.isCancelled { return }
-            let qualities = await scorer.evaluateGroup(group)
+            let qualities = await scorer.evaluateGroup(group) { [weak self] in
+                Task { @MainActor in self?.bumpScoringProgress(total: totalItemsToScore) }
+            }
             let scores = qualities.map(\.total)
             if Task.isCancelled { return }
             let sorted = scores.indices.sorted { scores[$0] > scores[$1] }
@@ -560,19 +570,17 @@ final class ReviewViewModel: ObservableObject {
             photoGroup.origin = origin
             groups.append(photoGroup)
             if selectedGroupID == nil { selectedGroupID = photoGroup.id }
-            ThumbnailCache.shared.warmup(for: groups)
-            ThumbnailCache.shared.prefetchICloudAssets(for: groups)
-
-            // Scoring spans 0.65–0.97, safely after video matching's max of 0.62.
-            // (The old 0.60 start overlapped with video's [0.52, 0.62] range,
-            // causing momentary backwards progress that corrupted ETA velocity.)
-            // Scoring is the last real work phase, so it runs right up to the
-            // 0.98 finalising step — no end-of-scan jump.
-            let p = 0.65 + Double(i + 1) / Double(allGroups.count) * 0.32
-            publishScanState(progress: p, message: "Scoring quality (\(i + 1)/\(allGroups.count))…", phase: .scoring)
         }
 
         if Task.isCancelled { return }
+        // Warm the review-grid thumbnail cache and kick off iCloud prefetch ONCE,
+        // after scoring — not per group. Calling these inside the loop with the
+        // whole accumulated `groups` array was O(N²) main-thread churn and flooded
+        // PHImageManager.default() with network downloads that starved the scorer's
+        // own thumbnail loads — the cause of the mid-scan stall.
+        ThumbnailCache.shared.warmup(for: groups)
+        ThumbnailCache.shared.prefetchICloudAssets(for: groups)
+
         publishScanState(progress: 0.98, message: "Finishing up…", phase: .finalising)
         scanState = .reviewing
         currentScanTask = nil
@@ -1093,6 +1101,22 @@ final class ReviewViewModel: ObservableObject {
     private func publishScanState(progress: Double, message: String, phase: ScanPhase) {
         let eta = computeETA(progress: progress)
         scanState = .scanning(progress: progress, message: message, phase: phase, etaSeconds: eta)
+    }
+
+    /// Advances the per-item scoring progress. Scoring spans the 0.65–0.97 band
+    /// (safely after video matching's max of 0.62, and running right up to the
+    /// 0.98 finalising step). Called once per scored photo from `evaluateGroup`'s
+    /// progress callback, hopped onto the main actor. Guarded on `.scanning` so a
+    /// late callback that lands after the `.reviewing` transition can't flip the
+    /// UI back to the progress screen.
+    private func bumpScoringProgress(total: Int) {
+        guard case .scanning = scanState else { return }
+        scoredItemCount += 1
+        let fraction = total > 0 ? Double(scoredItemCount) / Double(total) : 1
+        let p = 0.65 + min(1.0, fraction) * 0.32
+        publishScanState(progress: p,
+                         message: "Scoring quality (\(scoredItemCount)/\(total))…",
+                         phase: .scoring)
     }
 
     private func computeETA(progress: Double) -> Double? {
