@@ -522,8 +522,11 @@ final class ReviewViewModel: ObservableObject {
             if let idx = protectedIdx {
                 best = idx
                 // Promotion discards the veto's pick, so its explanation no
-                // longer describes the keeper — drop it rather than mislead.
-                localExplanation = nil
+                // longer describes the keeper. Replace it with the protection
+                // reason rather than dropping it: a protected photo kept over a
+                // higher-scoring sibling would otherwise show no "Why this one?"
+                // note at all, which is exactly the confusing case.
+                localExplanation = "Kept your protected photo"
             }
 
             var isCloseCall = false

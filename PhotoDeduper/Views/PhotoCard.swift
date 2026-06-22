@@ -15,6 +15,11 @@ struct PhotoCard: View {
     /// while preserving multi-select. Falls back to `onTap` when nil.
     var onModifierTap: (() -> Void)? = nil
     var onDoubleTap: (() -> Void)? = nil
+    /// On-device "Why this one?" reason for the keeper (sharpness veto, close-call
+    /// tie-break, or protection). Set only on the proposed keeper so the
+    /// explanation sits directly on the chosen photo — important when the keeper
+    /// isn't the highest-scoring one. nil on every other card.
+    var explanation: String? = nil
 
     var body: some View {
         // ── Layout anchor ─────────────────────────────────────────────────────
@@ -39,7 +44,7 @@ struct PhotoCard: View {
             )
             .overlay(alignment: .topTrailing) { statusBadge }
             .overlay(alignment: .topLeading)  { topLeftBadges }
-            .overlay(alignment: .bottomLeading) { scoreBadge }
+            .overlay(alignment: .bottomLeading) { bottomLeadingBadge }
             .overlay(alignment: .bottomTrailing) {
                 if onDoubleTap != nil { zoomButton }
             }
@@ -66,8 +71,19 @@ struct PhotoCard: View {
             // off scoreBadge, and the hint states the dominant plain-tap action.
             .accessibilityElement(children: .combine)
             .accessibilityLabel(item.isProtected ? "Protected photo" : (isKeeper ? "Photo to keep" : "Photo to delete"))
-            .accessibilityValue("Quality score \(String(format: "%.0f", score * 100)) percent")
+            .accessibilityValue(accessibilityValueText)
             .accessibilityHint("Tap to keep this one and remove the others")
+    }
+
+    /// Reads the quality score, and — on the keeper — the reason it was chosen, so
+    /// VoiceOver explains a lower-scoring keeper the same way the on-card banner
+    /// does for sighted users.
+    private var accessibilityValueText: String {
+        let pct = "Quality score \(String(format: "%.0f", score * 100)) percent"
+        if isKeeper, let explanation, !explanation.isEmpty {
+            return "\(pct). Why this one? \(explanation)"
+        }
+        return pct
     }
 
     private var borderColor: Color {
@@ -121,6 +137,43 @@ struct PhotoCard: View {
         .padding(8)
     }
 
+    /// On the keeper, the score pill grows into a small card that also carries the
+    /// "Why this one?" reason — so when the chosen photo isn't the highest-scoring
+    /// one, the explanation sits right on the picked photo instead of only in the
+    /// header. Every other card (and a keeper with no reason) keeps the plain pill.
+    @ViewBuilder
+    private var bottomLeadingBadge: some View {
+        if isKeeper, let explanation, !explanation.isEmpty {
+            keeperScoreReasonBar(explanation)
+        } else {
+            scoreBadge
+        }
+    }
+
+    private func keeperScoreReasonBar(_ reason: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 3) {
+                Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
+                Text(String(format: "%.1f%%", score * 100)).font(.caption.bold())
+            }
+            Label(reason, systemImage: "eye.fill")
+                .font(.caption2.bold())
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.72))
+        .foregroundStyle(.white)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        // Cap the width so a long reason wraps to a second line instead of running
+        // across the card into the trailing zoom button.
+        .frame(maxWidth: 240, alignment: .leading)
+        .padding(8)
+        .help("Why this one? \(reason)")
+    }
+
     private var scoreBadge: some View {
         HStack(spacing: 3) {
             Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
@@ -138,10 +191,11 @@ struct PhotoCard: View {
         // The "XX.X%" reads as a mystery number without this — a star + percent
         // looks like a rating but says nothing about what's being rated or why
         // one photo got picked over its near-identical neighbor. Spell out the
-        // inputs (the same signals PhotoScorer weighs) AND the consequence (it
-        // drives the default keeper) so a hover answers both "what is this?" and
-        // "why does it matter?".
-        .help("Quality score — sharpness, exposure, and composition. Higher is better; the app keeps the highest-scoring photo by default.")
+        // inputs (the same signals PhotoScorer weighs) AND the consequence so a
+        // hover answers both "what is this?" and "why does it matter?". The keeper
+        // isn't always the highest-scoring photo — a sharper or better-faced shot
+        // can win — so the copy points to the on-keeper "Why this one?" note.
+        .help("Quality score — sharpness, exposure, and composition. Higher is better. The app usually keeps the highest-scoring photo, but may pick a sharper or better-faced shot — the keeper shows a “Why this one?” note when it does.")
     }
 
     private var zoomButton: some View {

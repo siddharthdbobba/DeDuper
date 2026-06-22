@@ -806,7 +806,11 @@ struct GroupDetailView: View {
                     // something that must be kept.
                     onTap: { viewModel.selectKeeper(groupID: group.id, itemIndex: i) },
                     onModifierTap: { viewModel.toggleKeep(groupID: group.id, itemIndex: i) },
-                    onDoubleTap: { activeSheet = .lightbox(i) }
+                    onDoubleTap: { activeSheet = .lightbox(i) },
+                    // Attach the "Why this one?" reason only to the proposed keeper,
+                    // so the explanation rides on the chosen photo — the case the
+                    // user cares about is when that isn't the highest-scoring one.
+                    explanation: i == group.proposedKeeperIndex ? group.localExplanation : nil
                 )
             }
         }
