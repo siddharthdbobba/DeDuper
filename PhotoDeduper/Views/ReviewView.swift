@@ -49,11 +49,15 @@ struct ReviewView: View {
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Button {
-                        viewModel.reset()
+                        // Pause, don't discard: goHome() keeps the groups, the
+                        // staged set, and the current selection in memory so the
+                        // Splash can offer "Resume Review". A new scan (or the
+                        // Done screen's Home) is what actually clears the session.
+                        viewModel.goHome()
                     } label: {
                         Label("Home", systemImage: "house")
                     }
-                    .help("Return to Home")
+                    .help("Return to Home — your review stays in memory so you can resume it")
                     // The macOS toolbar collapses this Label to icon-only, so
                     // VoiceOver would otherwise announce just "house, button".
                     .accessibilityLabel("Home")
@@ -1144,7 +1148,13 @@ struct SetAsideView: View {
                     List {
                         Section {
                             ForEach(viewModel.stagedGroups) { group in
-                                SetAsideRow(group: group)
+                                SetAsideRow(group: group) {
+                                    viewModel.restoreStagedGroup(groupID: group.id)
+                                    // Closing when the set empties mirrors
+                                    // "Restore All" — an empty page has nothing
+                                    // left to act on.
+                                    if viewModel.stagedGroups.isEmpty { dismiss() }
+                                }
                             }
                         } footer: {
                             Text("Deleting these keeps \(keptCount) photo\(keptCount == 1 ? "" : "s") and removes \(deleteCount). They go to \(viewModel.isFolderScan ? "the macOS Trash" : "Recently Deleted") and stay recoverable for 30 days.")
@@ -1216,6 +1226,9 @@ struct SetAsideView: View {
 /// keep/delete summary for the group.
 private struct SetAsideRow: View {
     let group: PhotoGroup
+    /// Pulls just this group back into the live review list. Supplied by
+    /// SetAsideView so the row stays free of ViewModel/dismiss plumbing.
+    let onBringBack: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1230,6 +1243,13 @@ private struct SetAsideRow: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Button(action: onBringBack) {
+                Label("Bring Back", systemImage: "arrow.uturn.backward")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Move this group back into the review list")
+            .accessibilityLabel("Bring back this group of \(group.items.count)")
         }
         .padding(.vertical, 2)
     }

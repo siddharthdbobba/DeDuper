@@ -297,7 +297,12 @@ struct PhotoLightboxView: View {
 @MainActor
 final class LightboxImageCache: ObservableObject {
     private let cache = NSCache<NSString, PlatformImage>()
-    private var inFlight: Set<String> = []
+    /// One in-flight decode per item id. Both `load` and `prefetch` route through
+    /// this so the same 40-60 MB image is never decoded twice concurrently — e.g.
+    /// when `FullSizePhotoView.task` calls `load` for an item that rapid arrow-key
+    /// navigation already kicked off a `prefetch` for. @MainActor makes the
+    /// dictionary access safe without locks.
+    private var inFlightTasks: [String: Task<PlatformImage?, Never>] = [:]
 
     init() {
         // Keep a small window: current + immediate neighbors. NSImage at 3840px is
@@ -309,25 +314,32 @@ final class LightboxImageCache: ObservableObject {
         cache.object(forKey: item.id as NSString)
     }
 
-    /// Returns the cached image or loads it now. Cached results are returned synchronously.
+    /// Returns the cached image or loads it now. Cached results are returned
+    /// synchronously; concurrent callers (and any in-flight `prefetch`) share a
+    /// single decode keyed by `item.id`.
     func load(item: PhotoItem) async -> PlatformImage? {
         if let img = cached(for: item) { return img }
-        let img = await loadFromSource(item)
+        if let existing = inFlightTasks[item.id] { return await existing.value }
+        let task = Task { await loadFromSource(item) }
+        inFlightTasks[item.id] = task
+        let img = await task.value
+        inFlightTasks[item.id] = nil
         if let img { cache.setObject(img, forKey: item.id as NSString) }
         return img
     }
 
-    /// Fire-and-forget load; safe to call repeatedly. Coalesces concurrent requests
-    /// for the same item.
+    /// Fire-and-forget load; safe to call repeatedly. Shares the same per-id task
+    /// as `load`, so a prefetch and a concurrent `load` never both decode.
     func prefetch(item: PhotoItem) {
         if cached(for: item) != nil { return }
-        if inFlight.contains(item.id) { return }
-        inFlight.insert(item.id)
+        if inFlightTasks[item.id] != nil { return }
+        let task = Task { await loadFromSource(item) }
+        inFlightTasks[item.id] = task
         Task { [weak self] in
+            let img = await task.value
             guard let self else { return }
-            let img = await self.loadFromSource(item)
+            self.inFlightTasks[item.id] = nil
             if let img { self.cache.setObject(img, forKey: item.id as NSString) }
-            self.inFlight.remove(item.id)
         }
     }
 
@@ -593,11 +605,20 @@ struct PhotoMetadata {
 actor PhotoMetadataLoader {
     static let shared = PhotoMetadataLoader()
     private var cache: [String: PhotoMetadata] = [:]
+    /// Insertion order of cache keys, oldest first, so we can evict FIFO and keep
+    /// the cache from growing unbounded across a long session.
+    private var insertionOrder: [String] = []
+    private let cacheLimit = 500
 
     func load(for item: PhotoItem) async -> PhotoMetadata {
         if let cached = cache[item.id] { return cached }
         let result = await fetch(item: item)
         cache[item.id] = result
+        insertionOrder.append(item.id)
+        if insertionOrder.count > cacheLimit {
+            let oldest = insertionOrder.removeFirst()
+            cache[oldest] = nil
+        }
         return result
     }
 

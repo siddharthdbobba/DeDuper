@@ -216,8 +216,16 @@ class PhotoLibraryManager {
     }
 
     private static func loadFileThumbnail(_ url: URL, size: CGSize) -> CGImage? {
-        guard url.startAccessingSecurityScopedResource() else { return nil }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // Don't gate on the return value. These are CHILD file URLs enumerated
+        // from a security-scoped folder; they are not themselves security-scoped,
+        // so `startAccessingSecurityScopedResource()` returns false for them even
+        // though the file is perfectly readable while the PARENT folder's scope
+        // is active (ReviewViewModel holds it open for the whole session). The old
+        // `guard … else { return nil }` therefore failed every folder thumbnail →
+        // nil hashes → no duplicates found. Start best-effort and only balance the
+        // stop when it actually succeeded; attempt the read regardless.
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let maxDim = Int(max(size.width, size.height))

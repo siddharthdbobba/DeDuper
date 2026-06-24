@@ -1,7 +1,29 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+
+/// Closes the app when its single window is closed.
+///
+/// PhotoDeduper is a single-window utility (`WindowGroup` with the `File ▸ New`
+/// command removed), so once the user closes the window there is no menu item or
+/// Dock affordance to bring it back — App Review flagged exactly this under
+/// Guideline 4 (Design). Per Apple's guidance for single-window apps, the right
+/// behavior is to terminate when the last window closes. Settings live in
+/// `UserDefaults` (already persisted) and the in-progress review is intentionally
+/// in-memory only, so there is nothing else to save on the way out.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+#endif
 
 @main
 struct PhotoDeduperApp: App {
+#if os(macOS)
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+#endif
+
     init() {
         // Register defaults once at launch, before any window/scan/Settings
         // code can read them. See AppDefaults for the single source of truth

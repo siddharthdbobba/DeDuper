@@ -148,6 +148,18 @@ final class ReviewViewModel: ObservableObject {
     /// carry no bookmark of their own.
     private var scannedFolderURL: URL?
 
+    /// The folder URL whose security-scoped access we are currently HOLDING open
+    /// for the whole session (nil when none). Folder scans read child files long
+    /// after `scanFolder` returns — every thumbnail/hash/score, plus the review
+    /// grid and lightbox — and child file URLs enumerated from a security-scoped
+    /// folder are not themselves security-scoped (calling
+    /// `startAccessingSecurityScopedResource()` on them returns false). The only
+    /// thing that keeps those child reads legal is the PARENT folder's scope
+    /// being active, so we open it once at scan start and hold it until the
+    /// session is torn down. Without this, folder scans produced nil thumbnails
+    /// → nil hashes → zero duplicate groups (App Review 2.1 rejection).
+    private var heldFolderURL: URL?
+
     /// Re-entry guard against double-delete. Set on entry to confirmDelete and
     /// cleared on every exit path so a second rapid tap (e.g. double-tap on
     /// the delete button) can't kick off a concurrent deletion of the same items.
@@ -320,9 +332,33 @@ final class ReviewViewModel: ObservableObject {
         }
     }
 
+    /// Opens and HOLDS the parent folder's security scope for the session,
+    /// releasing any previously-held folder first. Balanced by
+    /// `releaseFolderAccess()`, which every teardown path (cancel/new scan/reset)
+    /// calls. We only record `heldFolderURL` when the start actually succeeds, so
+    /// `releaseFolderAccess` never stops a scope we don't own.
+    private func holdFolderAccess(_ url: URL) {
+        releaseFolderAccess()
+        if url.startAccessingSecurityScopedResource() {
+            heldFolderURL = url
+        }
+    }
+
+    /// Releases the session-held folder scope, if any. Idempotent.
+    private func releaseFolderAccess() {
+        if let held = heldFolderURL {
+            held.stopAccessingSecurityScopedResource()
+            heldFolderURL = nil
+        }
+    }
+
     func startFolderScan(url: URL) {
         cancelScan()
         scannedFolderURL = url
+        // Hold the folder's scope open for the whole session so later child-file
+        // reads (hashing, scoring, the review grid, the lightbox) are permitted.
+        // See `heldFolderURL`.
+        holdFolderAccess(url)
         // Close over `url` so `rescan()` re-scans the SAME folder. (`cancelScan`
         // inside the replayed call nils `scannedFolderURL`, but the very next
         // line here re-sets it from the captured `url`, so the security-scoped
@@ -359,6 +395,9 @@ final class ReviewViewModel: ObservableObject {
         // startFolderScan re-sets it immediately after. Photos-library scans
         // leave it nil so no folder scope is held when trashing assets.
         scannedFolderURL = nil
+        // Drop the session-held folder scope. A new scan (every entry point calls
+        // cancelScan first) or an explicit cancel ends the old folder's session.
+        releaseFolderAccess()
         if case .scanning = scanState {
             scanState = .idle
             // Clear partially-scored clusters so a cancelled scan doesn't leave
@@ -407,11 +446,33 @@ final class ReviewViewModel: ObservableObject {
         let stills = augmented.filter { !$0.isVideo }
         let videos = augmented.filter { $0.isVideo }
 
-        // 2) Time + burst grouping for stills.
+        // 2) Candidate grouping for stills.
         if Task.isCancelled { return }
-        publishScanState(progress: 0.08, message: "Finding time-adjacent groups…", phase: .timeGrouping)
         let grouper = SimilarityGrouper()
-        let (burstRaw, timeRaw) = grouper.groupByTime(stills, windowSeconds: timeWindow)
+        let burstRaw: [[PhotoItem]]
+        let timeRaw: [[PhotoItem]]
+        if isFolderScan {
+            // Folder scans dedupe by visual CONTENT, regardless of capture time.
+            // A user who points at a folder means "find duplicate image files",
+            // and copied / exported / downloaded files routinely carry no EXIF
+            // date (falling back to wildly different filesystem dates) — so
+            // time-window grouping scatters genuine duplicates into separate
+            // windows, or drops date-less files entirely, and finds nothing.
+            // (This was the App Review 2.1 rejection: duplicates in a chosen
+            // folder were never reported.) Treat every still as a single
+            // candidate group and let the visual-hash pass below discover the
+            // real clusters via connected components.
+            publishScanState(progress: 0.08, message: "Preparing comparison…", phase: .timeGrouping)
+            burstRaw = []
+            timeRaw = stills.count >= 2 ? [stills] : []
+        } else {
+            // Library scans keep time + burst grouping: an all-pairs comparison
+            // across an entire Photos library would be prohibitively expensive,
+            // and library assets carry reliable capture dates that make the time
+            // window an effective, cheap pre-filter.
+            publishScanState(progress: 0.08, message: "Finding time-adjacent groups…", phase: .timeGrouping)
+            (burstRaw, timeRaw) = grouper.groupByTime(stills, windowSeconds: timeWindow)
+        }
 
         if Task.isCancelled { return }
         var verifiedBurst: [[PhotoItem]] = []
@@ -752,6 +813,12 @@ final class ReviewViewModel: ObservableObject {
     /// reviewed past these groups, so they shouldn't displace the current
     /// position in the list.
     func restoreStagedGroups() {
+        // Same late-flush guard as `stageGroup`/`stageAllGroups`: a restore
+        // enqueued just before a flush completes must not resurrect groups into
+        // `groups` after `confirmDelete` already cleared everything and moved
+        // the session to `.done` — that would repopulate the list behind the
+        // Done screen.
+        guard case .reviewing = scanState else { return }
         guard !stagedGroups.isEmpty else { return }
         let restored = stagedGroups
         stagedGroups = []
@@ -759,6 +826,21 @@ final class ReviewViewModel: ObservableObject {
         // Only adopt a selection when there is none (every live group was
         // staged); otherwise leave the user's current position alone.
         if selectedGroupID == nil { selectedGroupID = restored.first?.id }
+    }
+
+    /// Moves a SINGLE staged group back into the live review list (the Set Aside
+    /// page's per-row "Bring Back" action). Same late-flush guard as
+    /// `restoreStagedGroups`; a no-op if the id isn't currently staged (e.g. a
+    /// stale tap after a flush already drained the set).
+    func restoreStagedGroup(groupID: UUID) {
+        guard case .reviewing = scanState else { return }
+        guard let idx = stagedGroups.firstIndex(where: { $0.id == groupID }) else { return }
+        let restored = stagedGroups.remove(at: idx)
+        // Appended at the end for the same reason as restoreStagedGroups: the
+        // user has already reviewed past this group, so it shouldn't displace
+        // their current spot in the list.
+        groups.append(restored)
+        if selectedGroupID == nil { selectedGroupID = restored.id }
     }
 
     // MARK: - Scoped deletes (stay in review)
@@ -1059,6 +1141,32 @@ final class ReviewViewModel: ObservableObject {
         transientNoticeTask = nil
     }
 
+    /// True when a paused review session is still sitting in memory — the user
+    /// pressed Home mid-review (via `goHome()`) without finishing or starting a
+    /// new scan. Splash keys its "Resume Review" affordance off this, and gates
+    /// new scans behind a clear-session warning. Spans both live and staged
+    /// groups: a session where everything has been set aside is still resumable.
+    var hasResumableSession: Bool {
+        !groups.isEmpty || !stagedGroups.isEmpty
+    }
+
+    /// Leave the review screen for the Splash WITHOUT discarding the session, so
+    /// the user can come back and pick up exactly where they left off. This is
+    /// the in-review "Home" action; it differs from `reset()` (which wipes
+    /// everything) by changing ONLY the navigation state. Groups, staged groups,
+    /// the current selection, and `lastScanAction` are all left intact, and the
+    /// thumbnail caches are left warm so resuming is instant.
+    func goHome() {
+        scanState = .idle
+    }
+
+    /// Return to the paused review session from Splash. No-op if there's nothing
+    /// to resume (guards against a stale tap after the session was cleared).
+    func resumeReview() {
+        guard hasResumableSession else { return }
+        scanState = .reviewing
+    }
+
     func reset() {
         groups          = []
         stagedGroups    = []
@@ -1078,6 +1186,10 @@ final class ReviewViewModel: ObservableObject {
         // picked set) the user has mentally left behind, and re-open a stale
         // security-scoped folder URL from the closure rather than a live bookmark.
         lastScanAction = nil
+        // Release the folder scope held for a folder-scan session (no-op for
+        // library scans). Mirrors cancelScan; reset is the "session fully over"
+        // path (Done screen's Home, error retry), so the scope must not leak.
+        releaseFolderAccess()
         ThumbnailCache.shared.stopAll()
     }
 

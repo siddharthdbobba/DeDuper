@@ -280,6 +280,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PhotoDeduper/PhotoDeduper.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
 				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;
@@ -362,6 +363,7 @@
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = "PhotoDeduper/PhotoDeduper-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = PhotoDeduper/PhotoDeduper.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEAD_CODE_STRIPPING = YES;
 				"ENABLE_HARDENED_RUNTIME[sdk=macosx*]" = YES;

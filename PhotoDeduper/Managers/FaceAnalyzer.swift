@@ -3,8 +3,7 @@ import Vision
 import CoreGraphics
 
 /// On-device face / eye / smile analysis used as a third dimension in
-/// `PhotoScorer` and as the automatic close-call resolver when no Claude API
-/// key is configured.
+/// `PhotoScorer` and as the automatic close-call resolver.
 ///
 /// All work happens locally via Apple's Vision framework — no network, no
 /// uploads, no API key required.

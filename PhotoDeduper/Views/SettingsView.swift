@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var protectedAlbumIDs: [String] = AppDefaults.protectedAlbumIDs
     @State private var protectedAlbums: [PhotoAlbum] = []
     @State private var auditExportURL: URL?
+    @State private var auditExportError: String?
 
     @Environment(\.dismiss) private var dismiss
 
@@ -40,6 +41,17 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showProtectedPicker) {
                 ProtectedAlbumsPicker(selected: $protectedAlbumIDs)
+            }
+            .alert("Couldn't export audit log",
+                   isPresented: Binding(
+                    get: { auditExportError != nil },
+                    set: { if !$0 { auditExportError = nil } }
+                   )) {
+                Button("OK", role: .cancel) { auditExportError = nil }
+            } message: {
+                if let auditExportError {
+                    Text(auditExportError)
+                }
             }
             .task { await loadProtectedAlbumTitles() }
             .onChange(of: protectedAlbumIDs) { _, _ in
@@ -210,10 +222,20 @@ struct SettingsView: View {
     }
 
     private func prepareAuditExport() {
+        // Write to a unique temp filename each time so a failed write can never
+        // leave a stale file behind for the share sheet to re-share.
         let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("photodeduper-audit.csv")
-        try? AuditLogger.shared.exportCSV(to: tmpURL)
-        auditExportURL = tmpURL
+            .appendingPathComponent("photodeduper-audit-\(UUID().uuidString).csv")
+        do {
+            try AuditLogger.shared.exportCSV(to: tmpURL)
+            // Only drive the share sheet once the write actually succeeds.
+            auditExportURL = tmpURL
+        } catch {
+            // Fail safe: never present a stale file. Clear the share URL and
+            // surface the failure.
+            auditExportURL = nil
+            auditExportError = error.localizedDescription
+        }
     }
 
     // MARK: - Save / load

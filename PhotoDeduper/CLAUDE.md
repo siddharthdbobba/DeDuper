@@ -16,4 +16,4 @@ This directory is the single Xcode target (`PhotoDeduper`). All Swift source fil
 ## Supporting Files
 
 - `Info.plist` — bundle metadata and `NSPhotoLibraryUsageDescription`
-- `PhotoDeduper.entitlements` — sandbox entitlements (Photos, network, user-selected files)
+- `PhotoDeduper.entitlements` — sandbox entitlements (app sandbox, Photos library, user-selected file read-write; no network)

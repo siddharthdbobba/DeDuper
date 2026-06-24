@@ -16,6 +16,15 @@ struct SplashView: View {
 #endif
     @State private var showAlbumPicker = false
 
+    /// Drives the "Start a new scan?" warning shown when a paused review session
+    /// is still in memory. Starting any fresh scan clears that session
+    /// (`runPipeline` wipes the groups), so we confirm first — see `guardNewScan`.
+    @State private var showClearSessionWarning = false
+    /// The new-scan action to run if the user confirms the clear-session warning.
+    /// Stashed here because the warning sits between the button tap and the scan
+    /// call, exactly like `pendingLibraryAction` does for the permission preamble.
+    @State private var pendingNewScanAction: (() -> Void)?
+
     @State private var showPhotoPicker = false
     @State private var photoAccessDenied = false
     @State private var photoAuthStatus: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -48,6 +57,24 @@ struct SplashView: View {
         if PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined {
             pendingLibraryAction = action
             showPermissionPreamble = true
+        } else {
+            action()
+        }
+    }
+
+    /// Funnels every "start a new scan" entry point through one guard. When a
+    /// paused review session is still in memory, kicking off a fresh scan would
+    /// clear it (the pipeline wipes `groups`/`stagedGroups`), so we stash the
+    /// action and warn first. With nothing to lose, `action` runs immediately —
+    /// identical to the pre-guard behavior. Composes outside `runLibraryAction`,
+    /// so the order is: warn about clearing → (first run only) permission
+    /// preamble → scan. In practice the two never stack: the only time a session
+    /// exists to warn about is after a prior scan, by which point permissions are
+    /// already decided and the preamble is skipped.
+    private func guardNewScan(_ action: @escaping () -> Void) {
+        if viewModel.hasResumableSession {
+            pendingNewScanAction = action
+            showClearSessionWarning = true
         } else {
             action()
         }
@@ -142,6 +169,14 @@ struct SplashView: View {
                     .frame(maxWidth: 400)
                 }
 
+                // Resume affordance for a paused session. The in-review "Home"
+                // button keeps the review in memory (goHome, not reset), so when
+                // the user lands back here with work still staged we surface a
+                // way straight back into it — otherwise the only "exit" from
+                // review would silently look like a discard. Extracted into a
+                // computed property to keep `body` light enough to type-check.
+                resumeBanner
+
                 // Each button now carries a one-line secondary caption (small,
                 // .secondary) under its title so the four near-identical entry
                 // points are distinguishable at a glance — previously the only
@@ -158,7 +193,7 @@ struct SplashView: View {
                         // one to precede with privacy context before the OS
                         // prompt. Skips straight to startScan() once access is
                         // already decided (see runLibraryAction).
-                        runLibraryAction { viewModel.startScan() }
+                        guardNewScan { runLibraryAction { viewModel.startScan() } }
                     } label: {
                         entryButtonLabel(
                             title: "Scan Photos Library",
@@ -175,7 +210,7 @@ struct SplashView: View {
                         // album picker fetches collections), so it triggers the
                         // same OS prompt and gets the same preamble. Showing the
                         // picker *is* the action resumed after "Continue".
-                        runLibraryAction { showAlbumPicker = true }
+                        guardNewScan { runLibraryAction { showAlbumPicker = true } }
                     } label: {
                         entryButtonLabel(
                             title: "Choose Album…",
@@ -197,13 +232,15 @@ struct SplashView: View {
                         // requestAuthorization itself and, on denial, raises its
                         // own actionable "Photos Access Required" alert — adding
                         // the preamble would stack two dialogs before the picker.
-                        Task {
-                            let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
-                            photoAuthStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-                            if status == .authorized || status == .limited {
-                                showPhotoPicker = true
-                            } else {
-                                photoAccessDenied = true
+                        guardNewScan {
+                            Task {
+                                let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+                                photoAuthStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+                                if status == .authorized || status == .limited {
+                                    showPhotoPicker = true
+                                } else {
+                                    photoAccessDenied = true
+                                }
                             }
                         }
                     } label: {
@@ -219,7 +256,7 @@ struct SplashView: View {
 
 #if os(macOS)
                     Button {
-                        showFolderPicker = true
+                        guardNewScan { showFolderPicker = true }
                     } label: {
                         entryButtonLabel(
                             title: "Choose Folder…",
@@ -314,6 +351,54 @@ struct SplashView: View {
             }
         } message: {
             Text("DeDuper scans your photos right on this Mac to find duplicates — nothing is uploaded, no account needed. Next, macOS will ask permission to access your photos.")
+        }
+        // Heads-up before a new scan throws away a paused review session. The
+        // confirm button replays the captured scan action (which clears the old
+        // session via the pipeline); "Cancel" leaves the session intact so the
+        // user can still tap "Resume Review". Mirrors the preamble's stash-and-
+        // clear pattern so a dismissed action can never be replayed later.
+        .alert("Start a new scan?", isPresented: $showClearSessionWarning) {
+            Button("Start New Scan", role: .destructive) {
+                let action = pendingNewScanAction
+                pendingNewScanAction = nil
+                action?()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingNewScanAction = nil
+            }
+        } message: {
+            Text("This clears your current review from memory so DeDuper can scan fresh. Your photos aren't touched — only the in-progress review is reset. Tap \"Cancel\" and use \"Resume Review\" to keep going.")
+        }
+    }
+
+    /// "Resume Review" card, shown only when a paused session is in memory.
+    /// Tinted green to read as "continue", distinct from the blue "start
+    /// something new" primary below it. Kept out of `body` so the heavily
+    /// nested splash layout stays within the type-checker's budget.
+    @ViewBuilder
+    private var resumeBanner: some View {
+        if viewModel.hasResumableSession {
+            let resumeCount = viewModel.groups.count + viewModel.stagedGroups.count
+            VStack(spacing: 6) {
+                Button {
+                    viewModel.resumeReview()
+                } label: {
+                    entryButtonLabel(
+                        title: "Resume Review",
+                        caption: "Continue your \(resumeCount) group\(resumeCount == 1 ? "" : "s")",
+                        systemImage: "arrow.uturn.backward"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(.green)
+                .help("Go back to the review you paused")
+
+                Text("Starting a new scan below will clear it.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.bottom, 4)
         }
     }
 

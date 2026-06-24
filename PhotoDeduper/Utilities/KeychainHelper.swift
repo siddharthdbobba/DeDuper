@@ -1,67 +1,6 @@
 import Foundation
-import Security
 
 enum KeychainHelper {
-
-    /// Hard caps on what we accept into the Keychain. The longest API key in
-    /// any provider we support is ~108 bytes; 4 KB leaves headroom for future
-    /// providers without giving an attacker an unbounded write surface.
-    private static let maxKeyBytes = 4096
-
-    private static let service = Bundle.main.bundleIdentifier ?? "com.photodeduper.app"
-
-    static func save(key: String, value: String) {
-        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
-        guard let data = cleaned.data(using: .utf8), data.count <= maxKeyBytes else { return }
-        delete(key: key)                    // delete-then-add pattern avoids duplicate-item error
-        let query: [CFString: Any] = [
-            kSecClass:          kSecClassGenericPassword,
-            kSecAttrService:    service,
-            kSecAttrAccount:    key,
-            kSecValueData:      data,
-            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-        SecItemAdd(query as CFDictionary, nil)
-    }
-
-    static func retrieve(key: String) -> String? {
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    /// Returns true iff a non-empty value is stored for `key`. Useful for UI
-    /// that wants to show "key configured" without reading the value into
-    /// memory. The Keychain query itself doesn't copy the value bytes when
-    /// `kSecReturnData` is false.
-    static func has(key: String) -> Bool {
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-            kSecReturnData:  false,
-            kSecMatchLimit:  kSecMatchLimitOne,
-        ]
-        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
-    }
-
-    static func delete(key: String) {
-        let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: key,
-        ]
-        SecItemDelete(query as CFDictionary)
-    }
 
     /// Removes plaintext files written by the old file-based implementation.
     /// Now performs a best-effort overwrite of the file contents with zeros

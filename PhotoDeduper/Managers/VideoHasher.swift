@@ -41,8 +41,16 @@ struct VideoHasher {
             }
         }
         if case .fileURL(let url) = item.source {
-            guard url.startAccessingSecurityScopedResource() else { return nil }
-            fileURLToRelease = url
+            // Best-effort: a child file URL enumerated from a security-scoped
+            // folder isn't itself security-scoped (this returns false), but the
+            // file is readable while the parent folder's scope is held open for
+            // the session (see ReviewViewModel.heldFolderURL). Only balance the
+            // stop when the start actually succeeded; proceed either way. Gating
+            // on the return value made folder videos un-fingerprintable → no
+            // video duplicates found.
+            if url.startAccessingSecurityScopedResource() {
+                fileURLToRelease = url
+            }
         }
 
         let asset = await loadAsset(for: item)
