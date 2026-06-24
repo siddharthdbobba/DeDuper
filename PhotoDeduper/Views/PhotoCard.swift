@@ -54,12 +54,20 @@ struct PhotoCard: View {
             // Gesture precedence is load-bearing here. The ⌘-modified TapGesture
             // uses `.highPriorityGesture` so that when ⌘ is held it WINS outright
             // and the plain `.onTapGesture` below does NOT also fire — otherwise a
-            // ⌘-click would run both `onModifierTap` (toggle) AND `onTap` (collapse
-            // to sole keeper), silently defeating multi-keep. With ⌘ up the modified
-            // gesture can't match (`.modifiers(.command)`), so the plain tap is the
-            // sole behavior and still fires `onTap`. On platforms without ⌘ (iOS)
-            // the modified gesture never matches, leaving plain tap as the only path.
+            // ⌘-click would run both `onModifierTap` (make sole keeper) AND `onTap`
+            // (toggle keep) — two conflicting actions on one click. With ⌘ up the
+            // modified gesture can't match (`.modifiers(.command)`), so the plain tap
+            // is the sole behavior and still fires `onTap`. On platforms without ⌘
+            // (iOS) the modified gesture never matches, leaving plain tap (additive
+            // toggle) as the only path — which is exactly how multi-keep works there.
+#if os(macOS)
+            // ⌘-click is macOS-only: `Gesture.modifiers(_:)` is unavailable on
+            // iOS, so this whole high-priority gesture must be compiled out there.
+            // iOS keeps only the plain tap below — which is the additive toggle, so
+            // multi-keep still works on touch (it just has no "keep only this"
+            // shortcut, there being no ⌘ key).
             .highPriorityGesture(TapGesture().modifiers(.command).onEnded { (onModifierTap ?? onTap)() })
+#endif
             .onTapGesture { onTap() }
             // VoiceOver: collapse the tile (image + stacked badges + zoom button)
             // into ONE element so a screen reader announces a single coherent
@@ -72,7 +80,7 @@ struct PhotoCard: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(item.isProtected ? "Protected photo" : (isKeeper ? "Photo to keep" : "Photo to delete"))
             .accessibilityValue(accessibilityValueText)
-            .accessibilityHint("Tap to keep this one and remove the others")
+            .accessibilityHint("Tap to keep or unkeep this photo")
     }
 
     /// Reads the quality score, and — on the keeper — the reason it was chosen, so

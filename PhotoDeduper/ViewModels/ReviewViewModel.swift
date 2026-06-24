@@ -615,6 +615,11 @@ final class ReviewViewModel: ObservableObject {
             return
         }
         if groups[i].keptIndices.contains(itemIndex) {
+            // Never let the user toggle off the last kept photo: a group must
+            // always keep at least one copy (otherwise the whole near-duplicate
+            // set would be queued for deletion). To remove an entire group, use
+            // Stage instead. Mandatory keepers already returned above.
+            guard groups[i].keptIndices.count > 1 else { return }
             groups[i].keptIndices.remove(itemIndex)
         } else {
             groups[i].keptIndices.insert(itemIndex)
@@ -626,6 +631,27 @@ final class ReviewViewModel: ObservableObject {
         var kept: Set<Int> = [itemIndex]
         kept.formUnion(mandatoryKeepers(in: groups[i]))
         groups[i].keptIndices = kept
+    }
+
+    /// Resolves a Face-to-Face comparison: keep `winner`, drop the `loser` it was
+    /// compared against, and leave the rest of the group's keep set untouched.
+    /// (Plain `selectKeeper` would collapse the group to a single keeper, wiping
+    /// any other photos the user chose to keep in the additive grid.)
+    func resolveComparison(groupID: UUID, keep winner: Int, drop loser: Int) {
+        guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        guard groups[i].items.indices.contains(winner) else { return }
+        groups[i].keptIndices.insert(winner)
+        // Degenerate comparison (a single-item group): nothing to drop, and
+        // removing `loser == winner` below would undo the keep we just made.
+        guard loser != winner else { return }
+        // Drop the loser unless it must always be kept (protected/undecodable).
+        if groups[i].items.indices.contains(loser),
+           !groups[i].items[loser].isProtected,
+           !groups[i].qualities[loser].isUndecodable {
+            groups[i].keptIndices.remove(loser)
+        }
+        // Belt-and-braces: never leave a group with nothing kept.
+        if groups[i].keptIndices.isEmpty { groups[i].keptIndices = [winner] }
     }
 
     func selectNextGroup()     { selectGroup(offset: 1) }
@@ -733,6 +759,87 @@ final class ReviewViewModel: ObservableObject {
         // Only adopt a selection when there is none (every live group was
         // staged); otherwise leave the user's current position alone.
         if selectedGroupID == nil { selectedGroupID = restored.first?.id }
+    }
+
+    // MARK: - Scoped deletes (stay in review)
+
+    /// Outcome of a scoped delete so callers can decide whether to mutate their
+    /// collection. `.totalFailure` covers both "nothing succeeded" and a thrown
+    /// error (incl. the user cancelling the macOS delete prompt) — in every such
+    /// case the caller keeps its groups so nothing is lost.
+    private enum ScopedDeleteResult { case success, totalFailure }
+
+    /// Shared deletion core for the per-group and set-aside delete actions.
+    /// Trashes the items, wires the Undo banner, and writes the audit log — the
+    /// same machinery `confirmDelete` uses — WITHOUT touching `groups`,
+    /// `stagedGroups`, or `scanState` (the caller owns those). Unlike
+    /// `confirmDelete` it never transitions to `.done`: these deletes happen
+    /// mid-review and the session continues.
+    private func performScopedDeletion(_ toDeleteByGroup: [(PhotoGroup, [PhotoItem])]) async -> ScopedDeleteResult {
+        let toDelete = toDeleteByGroup.flatMap(\.1)
+        guard !toDelete.isEmpty else { return .success }
+        let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
+        do {
+            let receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
+            // Nothing left the library/disk (e.g. every file-trash failed) —
+            // report failure so the caller keeps the groups intact.
+            if receipt.allFailedMessage != nil { return .totalFailure }
+            if !receipt.trashedAssetIDs.isEmpty || !receipt.trashedFiles.isEmpty {
+                self.lastReceipt = receipt.absorbing(self.hasActiveUndo ? self.lastReceipt : nil)
+                self.scheduleUndoExpiry(seconds: 120)
+            }
+            for (group, items) in toDeleteByGroup {
+                let succeeded = succeededItems(items, receipt: receipt)
+                if !succeeded.isEmpty { logDeletions(succeeded, in: group) }
+            }
+            return .success
+        } catch {
+            // Includes the user cancelling the system "delete N photos?" prompt:
+            // treat it as a no-op so the set-aside / group survives untouched.
+            return .totalFailure
+        }
+    }
+
+    /// Deletes only the set-aside groups (the "Set Aside" page's Delete action),
+    /// leaving the live review list intact and the session in review.
+    func deleteSetAside() async {
+        guard !isDeleting, !stagedGroups.isEmpty else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+        let byGroup = stagedGroups.map { ($0, $0.itemsToDelete) }
+        if await performScopedDeletion(byGroup) == .success {
+            // Mirror confirmDelete's partial-failure stance: each set-aside photo
+            // was either trashed or counted as a failure (not worth resurrecting
+            // a single failed group via parallel-array surgery) — clear the set.
+            stagedGroups = []
+        }
+    }
+
+    /// Deletes a single live group's deletion candidates immediately and removes
+    /// it from the review list (the per-group "Delete" action). Stays in review.
+    func deleteGroup(groupID: UUID) async {
+        guard !isDeleting,
+              let idx = groups.firstIndex(where: { $0.id == groupID }),
+              !groups[idx].itemsToDelete.isEmpty else { return }
+        isDeleting = true
+        defer { isDeleting = false }
+        let group = groups[idx]
+        guard await performScopedDeletion([(group, group.itemsToDelete)]) == .success else { return }
+        // Re-find the index — `await` above yielded the main actor, so the
+        // collection could have shifted — then remove, reassigning selection
+        // BEFORE the removal (next, else previous, else nil) exactly as
+        // `stageGroup` does so the sidebar List binding never sees a missing ID.
+        guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        if groups[i].id == selectedGroupID {
+            if i + 1 < groups.count {
+                selectedGroupID = groups[i + 1].id
+            } else if i > 0 {
+                selectedGroupID = groups[i - 1].id
+            } else {
+                selectedGroupID = nil
+            }
+        }
+        groups.remove(at: i)
     }
 
     /// Re-runs the SAME scan the current results came from, so a mid-review

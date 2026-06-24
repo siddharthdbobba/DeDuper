@@ -41,7 +41,9 @@ class PhotoScorer {
         onItemScored: (@Sendable () -> Void)? = nil
     ) async -> [PhotoQuality] {
         await withTaskGroup(of: (Int, PhotoQuality).self) { group in
-            let limit = max(1, min(maxConcurrent, items.count))
+            // min (not max(1, …)): an empty group must yield limit 0 so the seed
+            // loop is skipped and we return [] — max(1, …) would index items[0].
+            let limit = min(maxConcurrent, items.count)
             var next = 0
             // Seed the group with up to `limit` concurrent evaluations.
             while next < limit {

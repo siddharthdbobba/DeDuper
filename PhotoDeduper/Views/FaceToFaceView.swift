@@ -6,7 +6,10 @@ import Photos
 /// "Face-to-Face" mode — the single most-praised feature in PhotoSweeper reviews.
 struct FaceToFaceView: View {
     let group: PhotoGroup
-    let onAccept: (Int) -> Void
+    /// Resolve the comparison: `(winner, loser)` — keep the winner, drop the
+    /// photo it was compared against, leaving the rest of the group's keep set
+    /// untouched (so accepting here doesn't wipe an additive multi-keep).
+    let onAccept: (Int, Int) -> Void
     /// Closes the comparison. Supplied by the presenter (ReviewView), which now
     /// hosts this view as an in-window overlay rather than a sheet — so there is
     /// no `@Environment(\.dismiss)` to call; the presenter clears its own state.
@@ -36,7 +39,7 @@ struct FaceToFaceView: View {
     @StateObject private var imageCache = LightboxImageCache()
     @FocusState private var isFocused: Bool
 
-    init(group: PhotoGroup, onAccept: @escaping (Int) -> Void, onClose: @escaping () -> Void, isMaximized: Binding<Bool>) {
+    init(group: PhotoGroup, onAccept: @escaping (Int, Int) -> Void, onClose: @escaping () -> Void, isMaximized: Binding<Bool>) {
         self.group = group
         self.onAccept = onAccept
         self.onClose = onClose
@@ -140,8 +143,8 @@ struct FaceToFaceView: View {
         .onKeyPress { press in
             guard press.modifiers.isEmpty else { return .ignored }
             switch press.characters {
-            case "1": onAccept(leftIndex); onClose(); return .handled
-            case "2": onAccept(rightIndex); onClose(); return .handled
+            case "1": onAccept(leftIndex, rightIndex); onClose(); return .handled
+            case "2": onAccept(rightIndex, leftIndex); onClose(); return .handled
             case "0": resetView(); return .handled
             case "+", "=": zoomIn(); return .handled
             case "-", "_": zoomOut(); return .handled
@@ -332,7 +335,8 @@ struct FaceToFaceView: View {
                 HStack {
                     Spacer()
                     Button {
-                        onAccept(safeIndex)
+                        // Winner = this pane; loser = the opposing pane.
+                        onAccept(safeIndex, side == .left ? rightIndex : leftIndex)
                         onClose()
                     } label: {
                         Label("Keep \(side == .left ? "Left" : "Right")", systemImage: "checkmark.circle")

@@ -22,6 +22,13 @@ struct ReviewView: View {
     /// without losing their place. SettingsView is self-contained (reads/writes
     /// AppDefaults), so presenting it here Just Works.
     @State private var showSettings = false
+    /// Drives the "Set Aside" page sheet (toolbar tray button / sidebar footer
+    /// "View"). Lets the user see and delete just the groups they've set aside,
+    /// separate from the toolbar flush that deletes everything.
+    @State private var showSetAside = false
+    /// Set to the group id awaiting a delete confirmation from the `d` shortcut
+    /// when "Confirm before delete" is on. Drives the confirmation dialog below.
+    @State private var pendingDeleteGroupID: UUID?
     /// Snapshot of the scan-affecting AppDefaults taken the instant Settings
     /// opens, so we can tell on dismissal whether the user changed anything that
     /// the CURRENT results don't reflect (those values are read once at scan
@@ -95,6 +102,20 @@ struct ReviewView: View {
                 ToolbarItem(placement: .primaryAction) {
                     deleteButton
                 }
+                // "Set Aside (N)" — opens the page listing everything set aside,
+                // where the user can delete just those or restore them. Only shown
+                // when something is set aside; otherwise it'd be a dead control.
+                if !viewModel.stagedGroups.isEmpty {
+                    ToolbarItem(placement: .automatic) {
+                        Button {
+                            showSetAside = true
+                        } label: {
+                            Label("Set Aside (\(viewModel.stagedGroups.count))", systemImage: "tray.full")
+                        }
+                        .help("View the groups you've set aside (delete or restore them)")
+                        .accessibilityLabel("View set aside, \(viewModel.stagedGroups.count) groups")
+                    }
+                }
                 // Keyboard-shortcut legend. A toolbar button (NOT a key-press
                 // handler) is deliberate: it lives outside ReviewView's focus
                 // chain, so opening/closing it can't disturb the .focused /
@@ -157,11 +178,31 @@ struct ReviewView: View {
             }) {
                 SettingsView()
             }
+            .sheet(isPresented: $showSetAside) {
+                SetAsideView(viewModel: viewModel)
+            }
+            // Confirmation for the `d` (delete selected group) shortcut. Extracted
+            // into a ViewModifier so this already-large body stays under the Swift
+            // type-checker's expression-complexity ceiling (same reason
+            // ShortcutLegend etc. are separate structs).
+            .modifier(GroupDeleteConfirmation(viewModel: viewModel,
+                                              pendingDeleteGroupID: $pendingDeleteGroupID))
             .navigationTitle("DeDuper")
             .focusable()
             .focused($isFocused)
             .focusEffectDisabled()
-            .onAppear { isFocused = true }
+            .onAppear {
+                isFocused = true
+                // Prime the crisp images around the initially-selected group.
+                prefetchDisplayAround(viewModel.selectedGroupID)
+            }
+            // As selection moves (sidebar click, ↑/↓, j/k), pre-decode the
+            // full-size images for the selected group and a few neighbors so
+            // arriving at a not-yet-visited ("bottom") group no longer waits ~0.5s
+            // for the 1400px decode.
+            .onChange(of: viewModel.selectedGroupID) { _, newID in
+                prefetchDisplayAround(newID)
+            }
             // Defensive Esc: if focus stayed on ReviewView while the
             // Face-to-Face overlay is up (FaceToFaceView's focus grab can race
             // view insertion), Esc must still close the overlay. Otherwise let
@@ -206,9 +247,13 @@ struct ReviewView: View {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
                 viewModel.selectPreviousGroup(); return .handled
             }
-            .onKeyPress("d") {
+            .onKeyPress("a") {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
                 stageCurrent(); return .handled
+            }
+            .onKeyPress("d") {
+                guard viewModel.faceToFaceGroupID == nil else { return .handled }
+                deleteCurrent(); return .handled
             }
             .onKeyPress("f") {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
@@ -231,17 +276,39 @@ struct ReviewView: View {
                       let group = viewModel.groups.first(where: { $0.id == id }) else { return .ignored }
                 let target = digit - 1
                 guard target < group.items.count else { return .ignored }
-                viewModel.selectKeeper(groupID: id, itemIndex: target)
+                // Additive: a number key toggles that photo's keep state, so
+                // pressing 1 then 2 keeps both — consistent with tapping.
+                viewModel.toggleKeep(groupID: id, itemIndex: target)
                 return .handled
             }
             .background(
-                // Hidden control to provide Cmd+Z = undo while focused.
-                Button("") {
-                    Task { await viewModel.attemptUndo() }
+                // Hidden controls backing window-level keyboard shortcuts so they
+                // fire no matter which column has focus.
+                Group {
+                    // Cmd+Z = undo while a delete is still undoable.
+                    Button("") {
+                        Task { await viewModel.attemptUndo() }
+                    }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(!viewModel.hasActiveUndo)
+
+                    // ↑/↓ = previous/next group. The sidebar List moves selection
+                    // with the arrows natively, but ONLY while it's visible. Once
+                    // the sidebar is collapsed, focus shifts to the detail
+                    // ScrollView (which consumes arrows for scrolling), so group
+                    // navigation would otherwise stop working. A keyboardShortcut
+                    // is delivered via performKeyEquivalent — evaluated before the
+                    // ScrollView's key handling — so ↑/↓ keep changing groups with
+                    // the sidebar open OR put away. Guarded behind the Face-to-Face
+                    // overlay like the j/k handlers so it can't navigate invisibly.
+                    Button("") { viewModel.selectPreviousGroup() }
+                        .keyboardShortcut(.upArrow, modifiers: [])
+                        .disabled(viewModel.faceToFaceGroupID != nil)
+                    Button("") { viewModel.selectNextGroup() }
+                        .keyboardShortcut(.downArrow, modifiers: [])
+                        .disabled(viewModel.faceToFaceGroupID != nil)
                 }
-                .keyboardShortcut("z", modifiers: .command)
                 .hidden()
-                .disabled(!viewModel.hasActiveUndo)
             )
 
             // Bottom overlay stack: the transient notice (partial-failure /
@@ -295,8 +362,8 @@ struct ReviewView: View {
 
                 FaceToFaceView(
                     group: group,
-                    onAccept: { winner in
-                        viewModel.selectKeeper(groupID: group.id, itemIndex: winner)
+                    onAccept: { winner, loser in
+                        viewModel.resolveComparison(groupID: group.id, keep: winner, drop: loser)
                     },
                     onClose: { closeFaceToFace() },
                     isMaximized: $faceToFaceMaximized
@@ -349,6 +416,12 @@ struct ReviewView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Button("View") {
+                        showSetAside = true
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+                    .help("See the groups you've set aside — delete or restore them")
                     Button("Restore") {
                         viewModel.restoreStagedGroups()
                     }
@@ -466,6 +539,33 @@ struct ReviewView: View {
     /// non-destructive (nothing leaves the library or disk), and the final
     /// toolbar flush keeps its confirmation — gating the harmless step too
     /// would just reintroduce the per-group friction staging exists to remove.
+    /// Pre-decodes full-size (1400px) images for the selected group and a small
+    /// window of neighbors, so arriving at a not-yet-visited group doesn't stall
+    /// on a cold decode. The window is bounded (replaced as selection moves) so
+    /// memory stays in check on large libraries.
+    private func prefetchDisplayAround(_ id: UUID?) {
+        let radius = 2
+        guard let id, let idx = viewModel.groups.firstIndex(where: { $0.id == id }) else { return }
+        let lo = max(0, idx - radius)
+        let hi = min(viewModel.groups.count - 1, idx + radius)
+        guard lo <= hi else { return }
+        ThumbnailCache.shared.prefetchDisplay(forGroups: Array(viewModel.groups[lo...hi]))
+    }
+
+    /// Deletes the selected group now (the `d` shortcut). Honors "Confirm before
+    /// delete" — shows the confirmation dialog when on, deletes immediately when
+    /// off — mirroring the detail view's per-group Delete button.
+    private func deleteCurrent() {
+        guard let id = viewModel.selectedGroupID,
+              let group = viewModel.groups.first(where: { $0.id == id }),
+              !group.itemsToDelete.isEmpty else { return }
+        if AppDefaults.confirmBeforeDelete {
+            pendingDeleteGroupID = id
+        } else {
+            Task { await viewModel.deleteGroup(groupID: id) }
+        }
+    }
+
     private func stageCurrent() {
         guard let id = viewModel.selectedGroupID,
               let group = viewModel.groups.first(where: { $0.id == id }),
@@ -630,6 +730,7 @@ struct GroupDetailView: View {
     let groupID: UUID
     @ObservedObject var viewModel: ReviewViewModel
     @State private var activeSheet: ActiveSheet?
+    @State private var showGroupDeleteConfirm = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     private var group: PhotoGroup? {
@@ -661,6 +762,30 @@ struct GroupDetailView: View {
             case .lightbox(let index):
                 PhotoLightboxView(group: group, currentIndex: index)
             }
+        }
+        // Per-group "Delete now" confirmation. Only reached when "Confirm before
+        // delete" is ON (otherwise the button deletes immediately); the macOS
+        // system prompt still gates Photos-library deletes regardless.
+        .confirmationDialog("Delete \(group.itemsToDelete.count) photos?",
+                            isPresented: $showGroupDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete \(group.itemsToDelete.count) Photos", role: .destructive) {
+                Task { await viewModel.deleteGroup(groupID: group.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(viewModel.isFolderScan
+                 ? "They go to the macOS Trash and stay recoverable for 30 days."
+                 : "They go to Recently Deleted in Photos and stay recoverable for 30 days.")
+        }
+    }
+
+    /// Per-group delete request: honor the "Confirm before delete" setting, just
+    /// like the toolbar flush — confirm dialog when ON, immediate when OFF.
+    private func requestGroupDelete(_ group: PhotoGroup) {
+        if AppDefaults.confirmBeforeDelete {
+            showGroupDeleteConfirm = true
+        } else {
+            Task { await viewModel.deleteGroup(groupID: group.id) }
         }
     }
 
@@ -694,8 +819,8 @@ struct GroupDetailView: View {
             // appear on regular (Mac) width — on compact (iPhone) there's no ⌘ and
             // no keyboard, so advertising either would be a lie.
             Text(horizontalSizeClass != .compact
-                 ? "Tap a photo to keep it — the others will be removed. ⌘-click to keep more than one. Press F for side-by-side, D to set aside."
-                 : "Tap a photo to keep it — the others will be removed.")
+                 ? "Tap photos to keep them — anything you don't keep is removed. ⌘-click a photo to keep only that one. Press F for side-by-side, A to set aside, D to delete."
+                 : "Tap photos to keep them — anything you don't keep is removed.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -730,6 +855,18 @@ struct GroupDetailView: View {
                 }
                 .buttonStyle(.bordered)
                 .help("Set aside for deletion — nothing is deleted until you click Delete in the toolbar")
+
+                // Delete just this group now (vs. the toolbar flush which deletes
+                // every group + everything set aside). Stays in review afterwards.
+                Button(role: .destructive) {
+                    requestGroupDelete(group)
+                } label: {
+                    Label("Delete \(group.itemsToDelete.count)", systemImage: "trash")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .help("Delete this group's extra photos now — they go to Recently Deleted / Trash (recoverable 30 days)")
             }
         }
     }
@@ -795,17 +932,15 @@ struct GroupDetailView: View {
                     item: group.items[i],
                     score: group.displayScores[i],
                     isKeeper: group.keptIndices.contains(i),
-                    // Plain tap = make THIS the sole keeper (everything else in the
-                    // group becomes a deletion candidate). This matches the on-screen
-                    // instruction and the dominant "keep one, delete the rest" flow,
-                    // and is consistent with Face-to-Face's "Keep Left/Right" — both
-                    // route through selectKeeper. ⌘-click keeps the older multi-keeper
-                    // power feature alive via toggleKeep (add/remove without clearing
-                    // the rest). selectKeeper/toggleKeep both preserve mandatory
-                    // (protected/undecodable) keepers, so neither gesture can delete
-                    // something that must be kept.
-                    onTap: { viewModel.selectKeeper(groupID: group.id, itemIndex: i) },
-                    onModifierTap: { viewModel.toggleKeep(groupID: group.id, itemIndex: i) },
+                    // Plain tap = toggle THIS photo in/out of the keep set
+                    // (additive multi-keep): tap several photos to keep them all;
+                    // anything left unkept becomes a deletion candidate. ⌘-click is
+                    // the inverse power gesture — make this the sole keeper and drop
+                    // the rest of the group. toggleKeep/selectKeeper both preserve
+                    // mandatory (protected/undecodable) keepers, and toggleKeep won't
+                    // remove the last kept photo, so neither gesture can wipe a group.
+                    onTap: { viewModel.toggleKeep(groupID: group.id, itemIndex: i) },
+                    onModifierTap: { viewModel.selectKeeper(groupID: group.id, itemIndex: i) },
                     onDoubleTap: { activeSheet = .lightbox(i) },
                     // Attach the "Why this one?" reason only to the proposed keeper,
                     // so the explanation rides on the chosen photo — the case the
@@ -855,6 +990,34 @@ struct GroupDetailView: View {
 /// button, .onExitCommand for Esc) and the gesture wiring in PhotoCard (plain
 /// tap = sole keeper, ⌘-click = multi-keep, double-tap = lightbox). If those
 /// change, change these strings too — a stale cheat sheet is worse than none.
+/// The `d`-shortcut delete confirmation, extracted from ReviewView's body so the
+/// big view stays type-checkable. Shown only when "Confirm before delete" is on.
+private struct GroupDeleteConfirmation: ViewModifier {
+    @ObservedObject var viewModel: ReviewViewModel
+    @Binding var pendingDeleteGroupID: UUID?
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Delete photos?",
+            isPresented: Binding(get: { pendingDeleteGroupID != nil },
+                                 set: { if !$0 { pendingDeleteGroupID = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingDeleteGroupID
+        ) { id in
+            let count = viewModel.groups.first(where: { $0.id == id })?.itemsToDelete.count ?? 0
+            Button("Delete \(count) Photos", role: .destructive) {
+                Task { await viewModel.deleteGroup(groupID: id) }
+                pendingDeleteGroupID = nil
+            }
+            Button("Cancel", role: .cancel) { pendingDeleteGroupID = nil }
+        } message: { _ in
+            Text(viewModel.isFolderScan
+                 ? "They go to the macOS Trash and stay recoverable for 30 days."
+                 : "They go to Recently Deleted in Photos and stay recoverable for 30 days.")
+        }
+    }
+}
+
 private struct ShortcutLegend: View {
     /// (action, keys) pairs rendered as aligned label/key rows. Order roughly
     /// follows the review flow: navigate → choose keepers → set aside / compare
@@ -865,7 +1028,8 @@ private struct ShortcutLegend: View {
         ("Keep photo 1–9", "1 – 9"),
         ("Keep one (the rest are removed)", "Tap"),
         ("Keep several", "⌘-click"),
-        ("Set group aside for deletion", "D"),
+        ("Archive (set aside) group", "A"),
+        ("Delete selected group now", "D"),
         ("Side-by-side compare", "F"),
         ("Full-size view", "Double-click"),
         ("Undo last delete", "⌘Z"),
@@ -944,5 +1108,129 @@ private struct ScanSettingsSnapshot: Equatable {
     /// reorder (which the picker can't produce) merely offers a harmless rescan.
     func changedSinceSnapshot() -> Bool {
         self != ScanSettingsSnapshot.current()
+    }
+}
+
+// MARK: - Set Aside page
+
+/// Sheet that shows the groups the user has set aside, with a single action to
+/// delete just those (vs. the toolbar flush, which deletes everything) and a
+/// Restore All escape hatch. Deleting here stays in review — it does not end the
+/// session — and respects the "Confirm before delete" setting.
+struct SetAsideView: View {
+    @ObservedObject var viewModel: ReviewViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var showDeleteConfirm = false
+
+    private var deleteCount: Int {
+        viewModel.stagedGroups.reduce(0) { $0 + $1.itemsToDelete.count }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if viewModel.stagedGroups.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.secondary)
+                        Text("Nothing set aside")
+                            .font(.title3.bold())
+                        Text("Groups you set aside will appear here.")
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        Section {
+                            ForEach(viewModel.stagedGroups) { group in
+                                SetAsideRow(group: group)
+                            }
+                        } footer: {
+                            Text("Deleting these keeps \(keptCount) photo\(keptCount == 1 ? "" : "s") and removes \(deleteCount). They go to \(viewModel.isFolderScan ? "the macOS Trash" : "Recently Deleted") and stay recoverable for 30 days.")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Set Aside")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+                if !viewModel.stagedGroups.isEmpty {
+                    ToolbarItem(placement: .automatic) {
+                        Button("Restore All") {
+                            viewModel.restoreStagedGroups()
+                            dismiss()
+                        }
+                        .help("Move every set-aside group back into the review list")
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(role: .destructive) {
+                            requestDelete()
+                        } label: {
+                            Label("Delete \(deleteCount) Photos", systemImage: "trash")
+                        }
+                        .tint(.red)
+                    }
+                }
+            }
+            .confirmationDialog("Delete \(deleteCount) photos?",
+                                isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+                Button("Delete \(deleteCount) Photos", role: .destructive) { runDelete() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(viewModel.isFolderScan
+                     ? "They go to the macOS Trash and stay recoverable for 30 days."
+                     : "They go to Recently Deleted in Photos and stay recoverable for 30 days.")
+            }
+        }
+        .frame(minWidth: 460, minHeight: 420)
+    }
+
+    private var keptCount: Int {
+        viewModel.stagedGroups.reduce(0) { $0 + $1.keptIndices.count }
+    }
+
+    /// Honor "Confirm before delete" exactly like the toolbar flush.
+    private func requestDelete() {
+        if AppDefaults.confirmBeforeDelete {
+            showDeleteConfirm = true
+        } else {
+            runDelete()
+        }
+    }
+
+    private func runDelete() {
+        Task {
+            await viewModel.deleteSetAside()
+            // Close only if the delete actually drained the set — if it failed
+            // or the user cancelled the system prompt, the groups remain so the
+            // sheet stays open for another try.
+            if viewModel.stagedGroups.isEmpty { dismiss() }
+        }
+    }
+}
+
+/// One row in the Set Aside page: the proposed keeper's thumbnail plus a
+/// keep/delete summary for the group.
+private struct SetAsideRow: View {
+    let group: PhotoGroup
+
+    var body: some View {
+        HStack(spacing: 12) {
+            PhotoThumbnail(item: group.items[group.primaryKeeperIndex], contentMode: .fill)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Group of \(group.items.count)")
+                    .font(.subheadline.bold())
+                Text("Keeping \(group.keptIndices.count), deleting \(group.itemsToDelete.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 2)
     }
 }

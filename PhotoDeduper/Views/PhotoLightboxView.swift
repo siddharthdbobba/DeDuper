@@ -29,6 +29,11 @@ struct PhotoLightboxView: View {
     /// coordinate space), reported by `FullSizePhotoView`. Taps outside this rect
     /// dismiss the lightbox.
     @State private var imageRect: CGRect = .zero
+    /// True while the current photo is zoomed in. Reported up from
+    /// `FullSizePhotoView` so the lightbox can suspend its own tap-to-dismiss and
+    /// swipe-for-info gestures (which would otherwise fight panning) and hide the
+    /// prev/next chevrons.
+    @State private var isPhotoZoomed = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -65,7 +70,9 @@ struct PhotoLightboxView: View {
         // hit-test wall created by the fill-framed image area. The buttons, dots,
         // and the photo itself take precedence: their own gestures consume the tap,
         // and the location check below ignores anything inside the photo's bounds.
-        .gesture(outsidePhotoTapGesture)
+        // Disabled while zoomed (.subviews): a tap then is for panning/double-tap
+        // zoom, not dismissing.
+        .gesture(outsidePhotoTapGesture, including: isPhotoZoomed ? .subviews : .all)
         .focusable()
         .focused($isFocused)
         .focusEffectDisabled()
@@ -80,8 +87,9 @@ struct PhotoLightboxView: View {
             prefetchNeighbors()
         }
         // Swipe up to reveal info, swipe down to hide — the trackpad-native
-        // equivalent of the Apple Photos swipe-for-info gesture.
-        .gesture(infoSwipeGesture)
+        // equivalent of the Apple Photos swipe-for-info gesture. Disabled while
+        // zoomed (.subviews) so a drag pans the photo instead.
+        .gesture(infoSwipeGesture, including: isPhotoZoomed ? .subviews : .all)
         // Keyboard navigation
         .onKeyPress(.leftArrow)  { navigate(-1) }
         .onKeyPress(.rightArrow) { navigate(+1) }
@@ -190,21 +198,26 @@ struct PhotoLightboxView: View {
 
     private var imageArea: some View {
         ZStack {
-            FullSizePhotoView(item: group.items[currentIndex], cache: imageCache)
+            FullSizePhotoView(item: group.items[currentIndex], cache: imageCache, isZoomed: $isPhotoZoomed)
                 .id(group.items[currentIndex].id)
 
-            HStack {
-                navButton(systemImage: "chevron.left.circle.fill", enabled: currentIndex > 0) {
-                    navigate(-1)
+            // Hide the prev/next chevrons while zoomed: they'd sit on top of the
+            // panned photo and a stray click would jump to a different photo.
+            if !isPhotoZoomed {
+                HStack {
+                    navButton(systemImage: "chevron.left.circle.fill", enabled: currentIndex > 0) {
+                        navigate(-1)
+                    }
+                    Spacer()
+                    navButton(systemImage: "chevron.right.circle.fill", enabled: currentIndex < group.items.count - 1) {
+                        navigate(+1)
+                    }
                 }
-                Spacer()
-                navButton(systemImage: "chevron.right.circle.fill", enabled: currentIndex < group.items.count - 1) {
-                    navigate(+1)
-                }
+                .padding(.horizontal, 16)
             }
-            .padding(.horizontal, 16)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .help("Double-click or pinch to zoom · drag to pan")
     }
 
     private func navButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -703,46 +716,140 @@ actor PhotoMetadataLoader {
 struct FullSizePhotoView: View {
     let item: PhotoItem
     @ObservedObject var cache: LightboxImageCache
+    @Binding var isZoomed: Bool
     @State private var image: PlatformImage?
 
-    init(item: PhotoItem, cache: LightboxImageCache) {
+    // Zoom + pan state. These reset to fit automatically on navigation because
+    // the lightbox gives this view a fresh identity (`.id`) per photo.
+    @State private var scale: CGFloat = 1
+    @State private var steadyScale: CGFloat = 1   // scale at the end of the last gesture
+    @State private var offset: CGSize = .zero
+    @State private var steadyOffset: CGSize = .zero
+
+    private let maxScale: CGFloat = 6
+    private let doubleTapScale: CGFloat = 2.5
+
+    init(item: PhotoItem, cache: LightboxImageCache, isZoomed: Binding<Bool>) {
         self.item = item
         self.cache = cache
+        self._isZoomed = isZoomed
         // Seed from the cache synchronously so a cached image renders on the very
         // first frame — no spinner flash between arrow presses.
         _image = State(initialValue: cache.cached(for: item))
     }
 
     var body: some View {
-        ZStack {
-            if let image {
-                Image(platformImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    // Publish the photo's on-screen frame so the lightbox can tell
-                    // a tap on the photo from a tap on the surrounding black area
-                    // (which dismisses). Measured in the shared lightbox space.
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: LightboxImageRectKey.self,
-                                value: geo.frame(in: .named(lightboxSpaceName))
-                            )
-                        }
-                    )
-            } else {
-                VStack(spacing: 12) {
-                    ProgressView().tint(.white)
-                    Text("Loading…")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.6))
+        GeometryReader { geo in
+            ZStack {
+                if let image {
+                    Image(platformImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        // Publish the photo's on-screen frame so the lightbox can
+                        // tell a tap on the photo from a tap on the surrounding
+                        // black area (which dismisses). Measured in the shared
+                        // lightbox space.
+                        .background(
+                            GeometryReader { g in
+                                Color.clear.preference(
+                                    key: LightboxImageRectKey.self,
+                                    value: g.frame(in: .named(lightboxSpaceName))
+                                )
+                            }
+                        )
+                        // Pinch (trackpad) to zoom — always available.
+                        .gesture(magnifyGesture(container: geo.size, image: image))
+                        // Drag to pan, but only once zoomed in. At fit scale it's
+                        // disabled (.subviews) so the lightbox's swipe-for-info /
+                        // tap-to-dismiss keep working.
+                        .gesture(panGesture(container: geo.size, image: image),
+                                 including: scale > 1.01 ? .all : .subviews)
+                        // Double-click / double-tap toggles fit <-> zoomed.
+                        .onTapGesture(count: 2) { toggleZoom() }
+                } else {
+                    VStack(spacing: 12) {
+                        ProgressView().tint(.white)
+                        Text("Loading…")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: item.id) {
             if image != nil { return }
             image = await cache.load(item: item)
         }
+        // Keep the lightbox in sync so it can suspend its dismiss/info gestures.
+        .onChange(of: scale) { _, newValue in isZoomed = newValue > 1.01 }
+        .onAppear { isZoomed = scale > 1.01 }
+        .onDisappear { isZoomed = false }
+    }
+
+    // MARK: - Gestures
+
+    private func magnifyGesture(container: CGSize, image: PlatformImage) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                scale = min(max(steadyScale * value.magnification, 1), maxScale)
+            }
+            .onEnded { _ in
+                steadyScale = scale
+                if scale <= 1.01 {
+                    resetZoom()
+                } else {
+                    offset = clamp(offset, container: container, image: image, scale: scale)
+                    steadyOffset = offset
+                }
+            }
+    }
+
+    private func panGesture(container: CGSize, image: PlatformImage) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                let proposed = CGSize(width: steadyOffset.width + value.translation.width,
+                                      height: steadyOffset.height + value.translation.height)
+                offset = clamp(proposed, container: container, image: image, scale: scale)
+            }
+            .onEnded { _ in steadyOffset = offset }
+    }
+
+    private func toggleZoom() {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            if scale > 1.01 {
+                resetZoom()
+            } else {
+                scale = doubleTapScale
+                steadyScale = doubleTapScale
+            }
+        }
+    }
+
+    private func resetZoom() {
+        scale = 1; steadyScale = 1
+        offset = .zero; steadyOffset = .zero
+    }
+
+    // MARK: - Pan clamping
+
+    /// Keeps the pan within the image so it can't be dragged off into the black.
+    private func clamp(_ proposed: CGSize, container: CGSize, image: PlatformImage, scale: CGFloat) -> CGSize {
+        let fitted = fittedSize(image: image, in: container)
+        let scaled = CGSize(width: fitted.width * scale, height: fitted.height * scale)
+        let maxX = max(0, (scaled.width - container.width) / 2)
+        let maxY = max(0, (scaled.height - container.height) / 2)
+        return CGSize(width: min(max(proposed.width, -maxX), maxX),
+                      height: min(max(proposed.height, -maxY), maxY))
+    }
+
+    /// The on-screen size of the aspect-fit image inside `container`.
+    private func fittedSize(image: PlatformImage, in container: CGSize) -> CGSize {
+        let s = image.size
+        guard s.width > 0, s.height > 0, container.width > 0, container.height > 0 else { return container }
+        let r = min(container.width / s.width, container.height / s.height)
+        return CGSize(width: s.width * r, height: s.height * r)
     }
 }

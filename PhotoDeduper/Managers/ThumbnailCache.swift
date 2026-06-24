@@ -25,6 +25,11 @@ final class ThumbnailCache {
     /// so progressive warmup (called once per group) doesn't fire redundant
     /// network requests for the same asset.
     private var prefetchedAssetIDs: Set<String> = []
+    /// The assets currently pre-decoded at `displaySize`. Bounded to a window
+    /// around the selected group (see `prefetchDisplay`) and stopped/replaced as
+    /// the window moves, so the crisp 1400 px copies stay ready without holding
+    /// the whole library decoded at full size.
+    private var displayPrefetchedAssets: [PHAsset] = []
 
     /// Shared between `startCachingImages` and `stopCachingImages`.
     /// `PHCachingImageManager` matches a prefetch by (targetSize, contentMode, options),
@@ -33,6 +38,19 @@ final class ThumbnailCache {
     private let cachingOptions: PHImageRequestOptions = {
         let opts = PHImageRequestOptions()
         opts.deliveryMode = .fastFormat
+        opts.resizeMode   = .fast
+        opts.isNetworkAccessAllowed = true
+        return opts
+    }()
+
+    /// Options for the `displaySize` prefetch. highQualityFormat (vs. the warmup's
+    /// fastFormat) so the crisp 1400 px copy the grid actually shows is the one
+    /// decoded ahead of time — that decode is the ~0.5 s the user saw on cold
+    /// (never-visited) groups. Same instance is reused for start/stop so the
+    /// caching can be cancelled when the window moves.
+    private let displayCachingOptions: PHImageRequestOptions = {
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .highQualityFormat
         opts.resizeMode   = .fast
         opts.isNetworkAccessAllowed = true
         return opts
@@ -69,6 +87,35 @@ final class ThumbnailCache {
         )
     }
 
+    /// Pre-decodes the full `displaySize` (1400 px) image for the asset-backed
+    /// items in `groups` — meant to be called with a small window around the
+    /// selected group so the crisp copy is ready just before the user arrives.
+    /// Replaces the previous window (stops its caching first) to bound memory.
+    func prefetchDisplay(forGroups groups: [PhotoGroup]) {
+        let assets = groups
+            .flatMap(\.items)
+            .compactMap { item -> PHAsset? in
+                guard case .asset(let a) = item.source else { return nil }
+                return a
+            }
+        if !displayPrefetchedAssets.isEmpty {
+            manager.stopCachingImages(
+                for: displayPrefetchedAssets,
+                targetSize: Self.displaySize,
+                contentMode: .aspectFit,
+                options: displayCachingOptions
+            )
+        }
+        displayPrefetchedAssets = assets
+        guard !assets.isEmpty else { return }
+        manager.startCachingImages(
+            for: assets,
+            targetSize: Self.displaySize,
+            contentMode: .aspectFit,
+            options: displayCachingOptions
+        )
+    }
+
     /// Triggers background downloads for any iCloud-only assets so they are
     /// available locally when the user scrolls to them in the review grid.
     /// Each asset gets a low-priority image request that tells Photos to fetch
@@ -100,6 +147,7 @@ final class ThumbnailCache {
         manager.stopCachingImagesForAllAssets()
         warmedAssets = []
         prefetchedAssetIDs = []
+        displayPrefetchedAssets = []
     }
 
     // MARK: - Image requests
