@@ -175,6 +175,7 @@ struct ReviewView: View {
             // second visit that reverts the change doesn't retract a banner the
             // user might already be acting on.
             .sheet(isPresented: $showSettings, onDismiss: {
+                viewModel.applyReviewSortOrder()
                 if let snapshot = settingsSnapshot, snapshot.changedSinceSnapshot() {
                     viewModel.pendingRescan = true
                 }

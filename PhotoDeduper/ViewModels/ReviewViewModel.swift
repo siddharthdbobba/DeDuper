@@ -201,6 +201,23 @@ final class ReviewViewModel: ObservableObject {
         !(lastReceipt?.trashedFiles.isEmpty ?? true)
     }
 
+    private func groupSortDate(_ group: PhotoGroup) -> Date {
+        group.items.compactMap { $0.creationDate }.min() ?? .distantPast
+    }
+
+    func applyReviewSortOrder() {
+        guard !groups.isEmpty else { return }
+        let newestFirst = AppDefaults.reviewSortNewestFirst
+        groups = groups.enumerated()
+            .sorted { lhs, rhs in
+                let lhsDate = groupSortDate(lhs.element)
+                let rhsDate = groupSortDate(rhs.element)
+                if lhsDate == rhsDate { return lhs.offset < rhs.offset }
+                return newestFirst ? lhsDate > rhsDate : lhsDate < rhsDate
+            }
+            .map(\.element)
+    }
+
     /// Platform-specific message shown when full-library Photos authorization is denied.
     private var photosAccessDeniedMessage: String {
 #if os(macOS)
@@ -637,6 +654,8 @@ final class ReviewViewModel: ObservableObject {
         }
 
         if Task.isCancelled { return }
+        applyReviewSortOrder()
+        selectedGroupID = groups.first?.id
         // Warm the review-grid thumbnail cache and kick off iCloud prefetch ONCE,
         // after scoring — not per group. Calling these inside the loop with the
         // whole accumulated `groups` array was O(N²) main-thread churn and flooded

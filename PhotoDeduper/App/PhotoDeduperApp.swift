@@ -65,6 +65,7 @@ enum AppDefaults {
         static let closeCallThreshold = "closeCallThreshold"
         static let scanVideosToo = "scanVideosToo"
         static let holdForReview = "holdForReview"
+        static let reviewSortNewestFirst = "reviewSortNewestFirst"
         static let confirmBeforeDelete = "confirmBeforeDelete"
         static let hasSeenDeleteInfo = "hasSeenDeleteInfo"
         static let protectedAlbumIDs = "protectedAlbumIDs"
@@ -79,6 +80,7 @@ enum AppDefaults {
     static let pHashThresholdDefault = 15
     static let closeCallThresholdDefault = 15.0
     static let holdForReviewDefault = false
+    static let reviewSortNewestFirstDefault = false
     // Default OFF — pressing Delete removes photos immediately (they still go to
     // Recently Deleted and Cmd+Z undoes). Users who want the extra prompt can
     // re-enable it via Settings → Behavior → "Confirm before delete".
@@ -91,6 +93,7 @@ enum AppDefaults {
         Key.pHashThreshold: pHashThresholdDefault,
         Key.closeCallThreshold: closeCallThresholdDefault,
         Key.holdForReview: holdForReviewDefault,
+        Key.reviewSortNewestFirst: reviewSortNewestFirstDefault,
         Key.confirmBeforeDelete: confirmBeforeDeleteDefault,
     ]
 
@@ -122,6 +125,12 @@ enum AppDefaults {
     static var holdForReview: Bool {
         get { store.bool(forKey: Key.holdForReview) }
         set { store.set(newValue, forKey: Key.holdForReview) }
+    }
+
+    /// Whether duplicate groups are reviewed newest-first instead of oldest-first.
+    static var reviewSortNewestFirst: Bool {
+        get { store.bool(forKey: Key.reviewSortNewestFirst) }
+        set { store.set(newValue, forKey: Key.reviewSortNewestFirst) }
     }
 
     /// Whether to show a confirmation dialog before deleting.

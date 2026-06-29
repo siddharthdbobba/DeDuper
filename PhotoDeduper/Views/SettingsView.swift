@@ -10,6 +10,7 @@ struct SettingsView: View {
 
     @State private var scanVideosToo: Bool = AppDefaults.scanVideosToo
     @State private var holdForReview: Bool = AppDefaults.holdForReview
+    @State private var reviewSortNewestFirst: Bool = AppDefaults.reviewSortNewestFirst
     @State private var confirmBeforeDelete: Bool = AppDefaults.confirmBeforeDelete
 
     @State private var showProtectedPicker = false
@@ -150,13 +151,17 @@ struct SettingsView: View {
             Toggle(isOn: $holdForReview) {
                 Label("Hold for review (don't delete immediately)", systemImage: "tray.full")
             }
+            Picker("Review order", selection: $reviewSortNewestFirst) {
+                Text("Oldest first").tag(false)
+                Text("Newest first").tag(true)
+            }
             Toggle(isOn: $confirmBeforeDelete) {
                 Label("Confirm before delete", systemImage: "questionmark.circle")
             }
         } header: {
             Label("Behavior", systemImage: "switch.2")
         } footer: {
-            Text("Hold-for-review adds Photos-library photos to a \"PhotoDeduper Review\" album instead of deleting them. Folder images cannot be parked in a Photos album, so they are left untouched and never deleted in this mode.")
+            Text("Review order controls how duplicate groups appear during review. Hold-for-review adds Photos-library photos to a \"PhotoDeduper Review\" album instead of deleting them. Folder images cannot be parked in a Photos album, so they are left untouched and never deleted in this mode.")
                 .font(.caption)
         }
     }
@@ -261,6 +266,7 @@ struct SettingsView: View {
         AppDefaults.closeCallThreshold = closeCallThreshold
         AppDefaults.scanVideosToo = scanVideosToo
         AppDefaults.holdForReview = holdForReview
+        AppDefaults.reviewSortNewestFirst = reviewSortNewestFirst
         AppDefaults.confirmBeforeDelete = confirmBeforeDelete
         AppDefaults.protectedAlbumIDs = protectedAlbumIDs
         dismiss()
