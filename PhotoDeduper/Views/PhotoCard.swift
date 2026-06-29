@@ -8,11 +8,8 @@ struct PhotoCard: View {
     let score: Double
     let isKeeper: Bool
     let onTap: () -> Void
-    /// Optional alternate action for a modifier-held tap (macOS ⌘-click). When
-    /// set, the grid uses plain tap = "make this the sole keeper" and ⌘-click =
-    /// "toggle this in/out of the keeper set" (the multi-keep power feature),
-    /// keeping the dominant keep-one-delete-the-rest gesture honest with the copy
-    /// while preserving multi-select. Falls back to `onTap` when nil.
+    /// Optional alternate action for a modifier-held tap (macOS ⌘-click). Falls
+    /// back to `onTap` when nil.
     var onModifierTap: (() -> Void)? = nil
     var onDoubleTap: (() -> Void)? = nil
     /// On-device "Why this one?" reason for the keeper (sharpness veto, close-call
@@ -343,8 +340,8 @@ struct PhotoThumbnail: View {
         let maxPixel: CGFloat = displayQuality ? 1400 : 400
         let requestedID = item.id
         Task.detached(priority: .userInitiated) {
-            _ = url.startAccessingSecurityScopedResource()
-            defer { url.stopAccessingSecurityScopedResource() }
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
             guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
             let opts: [CFString: Any] = [

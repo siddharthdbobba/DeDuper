@@ -108,6 +108,17 @@ final class AuditLogger {
         }
     }
 
+    /// Waits for previously enqueued audit writes to finish without blocking the
+    /// main actor. The serial queue preserves ordering, so this resumes only
+    /// after earlier batchRecord/markRestored work has drained.
+    func flushPendingWrites() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                continuation.resume()
+            }
+        }
+    }
+
     /// Synchronous read used by the read-only query methods below. The actual
     /// decode is in a `nonisolated static` helper so the background write
     /// closures can reuse it without touching main-actor state.

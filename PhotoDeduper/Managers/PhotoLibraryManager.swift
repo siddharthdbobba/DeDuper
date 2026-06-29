@@ -240,8 +240,8 @@ class PhotoLibraryManager {
     /// Generates a still thumbnail from a video file (single keyframe near the start).
     private static func loadVideoThumbnail(_ url: URL, size: CGSize) async -> CGImage? {
         await Task.detached(priority: .userInitiated) {
-            _ = url.startAccessingSecurityScopedResource()
-            defer { url.stopAccessingSecurityScopedResource() }
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
             let asset = AVURLAsset(url: url)
             let generator = AVAssetImageGenerator(asset: asset)

@@ -822,8 +822,8 @@ struct GroupDetailView: View {
             }
 
             // Copy must match the actual gesture wiring in photosGrid: plain tap =
-            // sole keeper (the others become deletion candidates), ⌘-click = keep
-            // more than one. The ⌘-click clause and the F/D shortcut hints only
+            // additive keep, ⌘-click = sole keeper (the rest become deletion
+            // candidates). The ⌘-click clause and the F/D shortcut hints only
             // appear on regular (Mac) width — on compact (iPhone) there's no ⌘ and
             // no keyboard, so advertising either would be a lie.
             Text(horizontalSizeClass != .compact
@@ -996,7 +996,7 @@ struct GroupDetailView: View {
 /// The wording here MUST stay in sync with the actual key handlers in
 /// ReviewView.body (.onKeyPress for j/k/arrows/Return/1–9/d/f, the hidden ⌘Z
 /// button, .onExitCommand for Esc) and the gesture wiring in PhotoCard (plain
-/// tap = sole keeper, ⌘-click = multi-keep, double-tap = lightbox). If those
+/// tap = multi-keep, ⌘-click = sole keeper, double-tap = lightbox). If those
 /// change, change these strings too — a stale cheat sheet is worse than none.
 /// The `d`-shortcut delete confirmation, extracted from ReviewView's body so the
 /// big view stays type-checkable. Shown only when "Confirm before delete" is on.
@@ -1033,8 +1033,8 @@ private struct ShortcutLegend: View {
     private let rows: [(action: String, keys: String)] = [
         ("Next / previous group", "J / K  or  ↓ / ↑"),
         ("Keep photo 1–9", "1 – 9"),
-        ("Keep one (the rest are removed)", "Tap"),
-        ("Keep several", "⌘-click"),
+        ("Keep one (the rest are removed)", "⌘-click"),
+        ("Keep several", "Tap"),
         ("Archive (set aside) group", "Return"),
         ("Delete selected group now", "D"),
         ("Side-by-side compare", "F"),

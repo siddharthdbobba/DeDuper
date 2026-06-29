@@ -689,6 +689,7 @@ final class ReviewViewModel: ObservableObject {
 
     func selectKeeper(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        guard groups[i].items.indices.contains(itemIndex) else { return }
         var kept: Set<Int> = [itemIndex]
         kept.formUnion(mandatoryKeepers(in: groups[i]))
         groups[i].keptIndices = kept
@@ -719,16 +720,16 @@ final class ReviewViewModel: ObservableObject {
     func selectPreviousGroup() { selectGroup(offset: -1) }
 
     private func selectGroup(offset: Int) {
-        guard let id = selectedGroupID,
-              let idx = groups.firstIndex(where: { $0.id == id }) else { return }
-        let target = idx + offset
-        guard groups.indices.contains(target) else { return }
         // Defer the @Published mutation: onKeyPress handlers can fire while
         // SwiftUI is mid view-update, and a synchronous assignment here trips
         // "Publishing changes from within view updates".
-        let nextID = groups[target].id
         DispatchQueue.main.async { [weak self] in
-            self?.selectedGroupID = nextID
+            guard let self,
+                  let id = self.selectedGroupID,
+                  let idx = self.groups.firstIndex(where: { $0.id == id }) else { return }
+            let target = idx + offset
+            guard self.groups.indices.contains(target) else { return }
+            self.selectedGroupID = self.groups[target].id
         }
     }
 
@@ -849,7 +850,11 @@ final class ReviewViewModel: ObservableObject {
     /// collection. `.totalFailure` covers both "nothing succeeded" and a thrown
     /// error (incl. the user cancelling the macOS delete prompt) — in every such
     /// case the caller keeps its groups so nothing is lost.
-    private enum ScopedDeleteResult { case success, totalFailure }
+    private struct ScopedDeleteSuccess {
+        let succeededIDs: Set<String>
+    }
+
+    private enum ScopedDeleteResult { case success(ScopedDeleteSuccess), totalFailure }
 
     /// Shared deletion core for the per-group and set-aside delete actions.
     /// Trashes the items, wires the Undo banner, and writes the audit log — the
@@ -859,27 +864,67 @@ final class ReviewViewModel: ObservableObject {
     /// mid-review and the session continues.
     private func performScopedDeletion(_ toDeleteByGroup: [(PhotoGroup, [PhotoItem])]) async -> ScopedDeleteResult {
         let toDelete = toDeleteByGroup.flatMap(\.1)
-        guard !toDelete.isEmpty else { return .success }
+        guard !toDelete.isEmpty else { return .success(ScopedDeleteSuccess(succeededIDs: [])) }
         let mode: DeletionMode = AppDefaults.holdForReview ? .holdForReview : .directDelete
         do {
             let receipt = try await BatchDeleteManager.deleteItems(toDelete, mode: mode, folderScope: scannedFolderURL)
             // Nothing left the library/disk (e.g. every file-trash failed) —
             // report failure so the caller keeps the groups intact.
-            if receipt.allFailedMessage != nil { return .totalFailure }
+            if let message = receipt.allFailedMessage {
+                lastDeleteFailedCount = receipt.failedCount
+                showTransientNotice(message)
+                return .totalFailure
+            }
             if !receipt.trashedAssetIDs.isEmpty || !receipt.trashedFiles.isEmpty {
                 self.lastReceipt = receipt.absorbing(self.hasActiveUndo ? self.lastReceipt : nil)
                 self.scheduleUndoExpiry(seconds: 120)
+            }
+            lastDeleteFailedCount = receipt.failedCount
+            if receipt.failedCount > 0 {
+                showTransientNotice("\(receipt.failedCount) file\(receipt.failedCount == 1 ? "" : "s") couldn't be deleted")
             }
             for (group, items) in toDeleteByGroup {
                 let succeeded = succeededItems(items, receipt: receipt)
                 if !succeeded.isEmpty { logDeletions(succeeded, in: group) }
             }
-            return .success
+            return .success(ScopedDeleteSuccess(succeededIDs: succeededItemIDs(in: receipt)))
         } catch {
             // Includes the user cancelling the system "delete N photos?" prompt:
             // treat it as a no-op so the set-aside / group survives untouched.
             return .totalFailure
         }
+    }
+
+    private func succeededItemIDs(in receipt: DeletionReceipt) -> Set<String> {
+        var ids = Set(receipt.trashedAssetIDs)
+        ids.formUnion(receipt.stagedAssetIDs)
+        ids.formUnion(receipt.trashedFiles.map { $0.originalURL.absoluteString })
+        return ids
+    }
+
+    private func removeSucceededDeleteCandidates(from group: inout PhotoGroup, succeededIDs: Set<String>) {
+        guard !succeededIDs.isEmpty else { return }
+
+        var newItems: [PhotoItem] = []
+        var newScores: [Double] = []
+        var newQualities: [PhotoQuality] = []
+        var newKeptIndices = Set<Int>()
+        var newProposedKeeperIndex: Int?
+
+        for oldIndex in group.items.indices where !succeededIDs.contains(group.items[oldIndex].id) {
+            let newIndex = newItems.count
+            newItems.append(group.items[oldIndex])
+            newScores.append(group.scores[oldIndex])
+            newQualities.append(group.qualities[oldIndex])
+            if group.keptIndices.contains(oldIndex) { newKeptIndices.insert(newIndex) }
+            if oldIndex == group.proposedKeeperIndex { newProposedKeeperIndex = newIndex }
+        }
+
+        group.items = newItems
+        group.scores = newScores
+        group.qualities = newQualities
+        group.keptIndices = newKeptIndices
+        group.proposedKeeperIndex = newProposedKeeperIndex ?? newKeptIndices.min() ?? 0
     }
 
     /// Deletes only the set-aside groups (the "Set Aside" page's Delete action),
@@ -889,11 +934,11 @@ final class ReviewViewModel: ObservableObject {
         isDeleting = true
         defer { isDeleting = false }
         let byGroup = stagedGroups.map { ($0, $0.itemsToDelete) }
-        if await performScopedDeletion(byGroup) == .success {
-            // Mirror confirmDelete's partial-failure stance: each set-aside photo
-            // was either trashed or counted as a failure (not worth resurrecting
-            // a single failed group via parallel-array surgery) — clear the set.
-            stagedGroups = []
+        if case .success(let success) = await performScopedDeletion(byGroup) {
+            for i in stagedGroups.indices {
+                removeSucceededDeleteCandidates(from: &stagedGroups[i], succeededIDs: success.succeededIDs)
+            }
+            stagedGroups.removeAll { $0.itemsToDelete.isEmpty }
         }
     }
 
@@ -906,12 +951,14 @@ final class ReviewViewModel: ObservableObject {
         isDeleting = true
         defer { isDeleting = false }
         let group = groups[idx]
-        guard await performScopedDeletion([(group, group.itemsToDelete)]) == .success else { return }
+        guard case .success(let success) = await performScopedDeletion([(group, group.itemsToDelete)]) else { return }
         // Re-find the index — `await` above yielded the main actor, so the
         // collection could have shifted — then remove, reassigning selection
         // BEFORE the removal (next, else previous, else nil) exactly as
         // `stageGroup` does so the sidebar List binding never sees a missing ID.
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        removeSucceededDeleteCandidates(from: &groups[i], succeededIDs: success.succeededIDs)
+        guard groups[i].itemsToDelete.isEmpty else { return }
         if groups[i].id == selectedGroupID {
             if i + 1 < groups.count {
                 selectedGroupID = groups[i + 1].id
@@ -1067,6 +1114,7 @@ final class ReviewViewModel: ObservableObject {
             _ = await BatchDeleteManager.restoreFromRecentlyDeleted(assetIDs: receipt.trashedAssetIDs)
             restoredPhotoIDs.formUnion(receipt.trashedAssetIDs)
         }
+        await AuditLogger.shared.flushPendingWrites()
         var ids: Set<UUID> = []
         for entry in AuditLogger.shared.sessionEntries(since: sessionStart) {
             if restoredPhotoIDs.contains(entry.photoID) { ids.insert(entry.id) }

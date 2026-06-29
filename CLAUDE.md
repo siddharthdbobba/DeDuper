@@ -14,8 +14,8 @@ There is no package manager (no SPM, no CocoaPods). All dependencies are Apple s
 PhotoDeduper/          ← Xcode project file
 PhotoDeduper/          ← Main Swift source target
   App/                 ← App entry point and root view
-  Managers/            ← Business logic: photo library, scoring, grouping, deletion, AI review
-  Models/              ← Plain data types: PhotoItem, PhotoAlbum, AIReviewResult
+  Managers/            ← Business logic: photo library, scoring, grouping, deletion
+  Models/              ← Plain data types: PhotoItem, PhotoAlbum
   Utilities/           ← KeychainHelper
   ViewModels/          ← ReviewViewModel (central state machine)
   Views/               ← All SwiftUI views

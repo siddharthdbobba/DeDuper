@@ -383,8 +383,8 @@ final class LightboxImageCache: ObservableObject {
 
     private func loadFile(_ url: URL) async -> PlatformImage? {
         await Task.detached(priority: .userInitiated) {
-            _ = url.startAccessingSecurityScopedResource()
-            defer { url.stopAccessingSecurityScopedResource() }
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
             return PlatformImage(contentsOfFile: url.path)
         }.value
     }
@@ -660,8 +660,8 @@ actor PhotoMetadataLoader {
         var meta = PhotoMetadata()
         meta.filename = url.lastPathComponent
 
-        _ = url.startAccessingSecurityScopedResource()
-        defer { url.stopAccessingSecurityScopedResource() }
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) {
             meta.fileSize = (attrs[.size] as? NSNumber)?.int64Value
