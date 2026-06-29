@@ -771,13 +771,31 @@ struct GroupDetailView: View {
     }
 
     private func content(for group: PhotoGroup) -> some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 16) {
-                header(group: group)
-                photosGrid(group: group)
+        let count = group.items.count
+        // A group that fits on ONE row is laid out WITHOUT a ScrollView and its
+        // photo row is height-capped, so even two PORTRAIT photos sit fully on
+        // the page with no in-group scroll. Multi-row groups (many photos) keep
+        // the scrolling grid — fitting many rows to one page would shrink each
+        // photo below usefulness.
+        let singleRow = count <= columnCount(for: count)
+        return Group {
+            if singleRow {
+                VStack(alignment: .leading, spacing: 16) {
+                    header(group: group)
+                    singleRowPhotos(group: group)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else {
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        header(group: group)
+                        photosGrid(group: group)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         // Single sheet — avoids "only the last sheet fires" SwiftUI multi-sheet bug.
         // Face-to-Face is intentionally NOT presented here: it's hosted as an
@@ -940,6 +958,60 @@ struct GroupDetailView: View {
 
     // MARK: - Responsive grid
 
+    /// Number of columns the grid uses for a group of `count` photos. A group
+    /// fits on ONE row exactly when `count <= columnCount(for: count)` — the
+    /// case `content(for:)` lays out without a ScrollView and `singleRowPhotos`
+    /// height-caps so it never scrolls.
+    private func columnCount(for count: Int) -> Int {
+        switch count {
+        case 1: return 1
+        case 2: return 2
+        default: return horizontalSizeClass == .compact ? 2 : min(count, 4)
+        }
+    }
+
+    /// One tile in the review grid/row. Extracted so the scrolling multi-row
+    /// grid (`photosGrid`) and the height-capped single-row layout
+    /// (`singleRowPhotos`) build identical cards from one place.
+    ///
+    /// Plain tap = toggle THIS photo in/out of the keep set (additive
+    /// multi-keep): tap several to keep them all; anything left unkept becomes a
+    /// deletion candidate. ⌘-click is the inverse power gesture — make this the
+    /// sole keeper and drop the rest. toggleKeep/selectKeeper both preserve
+    /// mandatory (protected/undecodable) keepers, and toggleKeep won't remove the
+    /// last kept photo, so neither gesture can wipe a group. The "Why this one?"
+    /// reason rides only on the proposed keeper.
+    private func photoCard(group: PhotoGroup, index i: Int) -> some View {
+        PhotoCard(
+            item: group.items[i],
+            score: group.displayScores[i],
+            isKeeper: group.keptIndices.contains(i),
+            onTap: { viewModel.toggleKeep(groupID: group.id, itemIndex: i) },
+            onModifierTap: { viewModel.selectKeeper(groupID: group.id, itemIndex: i) },
+            onDoubleTap: { activeSheet = .lightbox(i) },
+            explanation: i == group.proposedKeeperIndex ? group.localExplanation : nil
+        )
+    }
+
+    /// Single-row layout: all of the group's photos in one HStack that fills the
+    /// height left under the header. Each card is capped with
+    /// `.frame(maxHeight: .infinity)`, and because PhotoCard fits its photo to
+    /// that box (`.aspectRatio(.fit)`), two tall PORTRAIT photos shrink to the
+    /// page instead of overflowing — so a single-row group never has to scroll.
+    /// A lone photo keeps the 520pt width cap and is centered.
+    private func singleRowPhotos(group: PhotoGroup) -> some View {
+        let count = group.items.count
+        let spacing: CGFloat = 10
+        return HStack(spacing: spacing) {
+            ForEach(group.items.indices, id: \.self) { i in
+                photoCard(group: group, index: i)
+                    .frame(maxWidth: count == 1 ? 520 : .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity,
+               alignment: count == 1 ? .center : .top)
+    }
+
     private func photosGrid(group: PhotoGroup) -> some View {
         let count = group.items.count
         let spacing: CGFloat = 10
@@ -961,39 +1033,12 @@ struct GroupDetailView: View {
         //                 the full pane width in a single row (count ≤ 4) or wrap
         //                 into balanced rows (count 5+). Cap at 4 keeps individual
         //                 photos comfortably sized even on narrow layouts.
-        let columns: [GridItem]
-        let colCount: Int
-        switch count {
-        case 1:
-            colCount = 1
-        case 2:
-            colCount = 2
-        default:
-            colCount = horizontalSizeClass == .compact ? 2 : min(count, 4)
-        }
-        columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: colCount)
+        let colCount = columnCount(for: count)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: spacing), count: colCount)
 
         return LazyVGrid(columns: columns, spacing: spacing) {
             ForEach(group.items.indices, id: \.self) { i in
-                PhotoCard(
-                    item: group.items[i],
-                    score: group.displayScores[i],
-                    isKeeper: group.keptIndices.contains(i),
-                    // Plain tap = toggle THIS photo in/out of the keep set
-                    // (additive multi-keep): tap several photos to keep them all;
-                    // anything left unkept becomes a deletion candidate. ⌘-click is
-                    // the inverse power gesture — make this the sole keeper and drop
-                    // the rest of the group. toggleKeep/selectKeeper both preserve
-                    // mandatory (protected/undecodable) keepers, and toggleKeep won't
-                    // remove the last kept photo, so neither gesture can wipe a group.
-                    onTap: { viewModel.toggleKeep(groupID: group.id, itemIndex: i) },
-                    onModifierTap: { viewModel.selectKeeper(groupID: group.id, itemIndex: i) },
-                    onDoubleTap: { activeSheet = .lightbox(i) },
-                    // Attach the "Why this one?" reason only to the proposed keeper,
-                    // so the explanation rides on the chosen photo — the case the
-                    // user cares about is when that isn't the highest-scoring one.
-                    explanation: i == group.proposedKeeperIndex ? group.localExplanation : nil
-                )
+                photoCard(group: group, index: i)
             }
         }
         // Single-photo groups would otherwise stretch one full-pane-wide column,
