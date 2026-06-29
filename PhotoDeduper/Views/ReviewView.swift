@@ -255,14 +255,6 @@ struct ReviewView: View {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
                 viewModel.selectNextGroup(); return .handled
             }
-            .onKeyPress("k") {
-                guard viewModel.faceToFaceGroupID == nil else { return .handled }
-                viewModel.selectPreviousGroup(); return .handled
-            }
-            .onKeyPress("d") {
-                guard viewModel.faceToFaceGroupID == nil else { return .handled }
-                deleteCurrent(); return .handled
-            }
             .onKeyPress("f") {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
                 if let id = viewModel.selectedGroupID,
@@ -276,6 +268,23 @@ struct ReviewView: View {
                 // Swallow stray keys while the Face-to-Face overlay is up (see
                 // the guard comment above) — Esc is handled separately.
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
+                // k / d (and their Shift variants) are handled HERE rather than as
+                // standalone .onKeyPress("k")/("d") modifiers: SwiftUI's bare
+                // KeyEquivalent onKeyPress can fire regardless of Shift, which would
+                // let a plain "k" handler swallow ⇧K. Reading press.modifiers in this
+                // closure is the only place that reliably distinguishes them, so all
+                // four (k, ⇧K, d, ⇧D) are routed from one spot.
+                let shiftHeld = press.modifiers.contains(.shift)
+                switch press.characters.lowercased() {
+                case "k":
+                    if shiftHeld { keepAllCurrent() } else { viewModel.selectPreviousGroup() }
+                    return .handled
+                case "d":
+                    if shiftHeld { deleteAllCurrent() } else { deleteCurrent() }
+                    return .handled
+                default:
+                    break
+                }
                 // Number keys 1-9 select the corresponding photo in the current group.
                 // Ignore if a modifier is held — Cmd+1 etc. belong to the system.
                 guard press.modifiers.isEmpty else { return .ignored }
@@ -577,9 +586,18 @@ struct ReviewView: View {
     /// exists to remove.
     private func stageCurrent() {
         guard let id = viewModel.selectedGroupID,
-              let group = viewModel.groups.first(where: { $0.id == id }),
-              !group.itemsToDelete.isEmpty else { return }
+              viewModel.groups.contains(where: { $0.id == id }) else { return }
         viewModel.stageGroup(groupID: id)
+    }
+
+    private func keepAllCurrent() {
+        guard let id = viewModel.selectedGroupID else { return }
+        viewModel.keepAllInGroup(groupID: id)
+    }
+
+    private func deleteAllCurrent() {
+        guard let id = viewModel.selectedGroupID else { return }
+        viewModel.deleteAllInGroup(groupID: id)
     }
 
     // MARK: - Undo banner
@@ -850,21 +868,41 @@ struct GroupDetailView: View {
             .disabled(group.items.count < 2)
             .help("Side-by-side comparison of the top two candidates (F)")
 
-            if !group.itemsToDelete.isEmpty {
-                // Stages locally — no confirmation dialog (even with "Confirm
-                // before delete" ON) and no red tint: staging is non-destructive,
-                // so signaling danger here would be dishonest. The destructive
-                // step is the toolbar flush, which keeps both the red tint and
-                // its confirmation.
-                Button {
-                    viewModel.stageGroup(groupID: group.id)
-                } label: {
-                    Label("Set Aside \(group.itemsToDelete.count)", systemImage: "tray.and.arrow.down")
-                        .font(.subheadline)
-                }
-                .buttonStyle(.bordered)
-                .help("Set aside for deletion (Return) — nothing is deleted until you click Delete in the toolbar")
+            Button {
+                viewModel.keepAllInGroup(groupID: group.id)
+            } label: {
+                Label("Keep All", systemImage: "checkmark.circle")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .disabled(group.itemsToDelete.isEmpty)
+            .help("Keep every photo in this group (⇧K)")
 
+            Button {
+                viewModel.deleteAllInGroup(groupID: group.id)
+            } label: {
+                Label("Delete All", systemImage: "xmark.circle")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .help("Mark every photo here for deletion, except protected ones (⇧D)")
+
+            // Stages locally — no confirmation dialog (even with "Confirm
+            // before delete" ON) and no red tint: staging is non-destructive,
+            // so signaling danger here would be dishonest. The destructive
+            // step is the toolbar flush, which keeps both the red tint and
+            // its confirmation.
+            Button {
+                viewModel.stageGroup(groupID: group.id)
+            } label: {
+                Label(group.itemsToDelete.isEmpty ? "Set Aside" : "Set Aside \(group.itemsToDelete.count)",
+                      systemImage: "tray.and.arrow.down")
+                    .font(.subheadline)
+            }
+            .buttonStyle(.bordered)
+            .help("Set this group aside / dismiss it from review (Return)")
+
+            if !group.itemsToDelete.isEmpty {
                 // Delete just this group now (vs. the toolbar flush which deletes
                 // every group + everything set aside). Stays in review afterwards.
                 Button(role: .destructive) {
@@ -995,10 +1033,11 @@ struct GroupDetailView: View {
 /// no app state and never needs to re-render.
 ///
 /// The wording here MUST stay in sync with the actual key handlers in
-/// ReviewView.body (.onKeyPress for j/k/arrows/Return/1–9/d/f, the hidden ⌘Z
-/// button, .onExitCommand for Esc) and the gesture wiring in PhotoCard (plain
-/// tap = multi-keep, ⌘-click = sole keeper, double-tap = lightbox). If those
-/// change, change these strings too — a stale cheat sheet is worse than none.
+/// ReviewView.body (.onKeyPress for j/k/arrows/Return/1–9/d/f/⇧K/⇧D, the
+/// hidden ⌘Z button, .onExitCommand for Esc) and the gesture wiring in
+/// PhotoCard (plain tap = multi-keep, ⌘-click = sole keeper, double-tap =
+/// lightbox). If those change, change these strings too — a stale cheat sheet
+/// is worse than none.
 /// The `d`-shortcut delete confirmation, extracted from ReviewView's body so the
 /// big view stays type-checkable. Shown only when "Confirm before delete" is on.
 private struct GroupDeleteConfirmation: ViewModifier {
@@ -1036,6 +1075,8 @@ private struct ShortcutLegend: View {
         ("Keep photo 1–9", "1 – 9"),
         ("Keep one (the rest are removed)", "⌘-click"),
         ("Keep several", "Tap"),
+        ("Keep all in group", "⇧K"),
+        ("Delete all in group", "⇧D"),
         ("Archive (set aside) group", "Return"),
         ("Delete selected group now", "D"),
         ("Side-by-side compare", "F"),

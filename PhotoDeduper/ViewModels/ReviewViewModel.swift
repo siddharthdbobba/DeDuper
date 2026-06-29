@@ -706,6 +706,16 @@ final class ReviewViewModel: ObservableObject {
         }
     }
 
+    func keepAllInGroup(groupID: UUID) {
+        guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[i].keptIndices = Set(groups[i].items.indices)
+    }
+
+    func deleteAllInGroup(groupID: UUID) {
+        guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
+        groups[i].keptIndices = mandatoryKeepers(in: groups[i])
+    }
+
     func selectKeeper(groupID: UUID, itemIndex: Int) {
         guard let i = groups.firstIndex(where: { $0.id == groupID }) else { return }
         guard groups[i].items.indices.contains(itemIndex) else { return }
