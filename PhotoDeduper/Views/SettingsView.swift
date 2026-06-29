@@ -156,7 +156,7 @@ struct SettingsView: View {
         } header: {
             Label("Behavior", systemImage: "switch.2")
         } footer: {
-            Text("Hold-for-review adds flagged photos to a \"PhotoDeduper Review\" album in Photos instead of deleting them, so you can audit them before manually trashing.")
+            Text("Hold-for-review adds Photos-library photos to a \"PhotoDeduper Review\" album instead of deleting them. Folder images cannot be parked in a Photos album, so they are left untouched and never deleted in this mode.")
                 .font(.caption)
         }
     }

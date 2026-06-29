@@ -8,38 +8,59 @@ struct ConfirmDeleteSheet: View {
         AppDefaults.holdForReview
     }
 
+    private var title: String {
+        if isHoldForReview {
+            return viewModel.isFolderScan ? "Leave Files in Place" : "Move to Review Album"
+        }
+        return "Confirm Deletion"
+    }
+
+    private var primaryButtonLabel: String {
+        if isHoldForReview {
+            return viewModel.isFolderScan
+                ? "Leave \(viewModel.totalToDelete) in Place"
+                : "Move \(viewModel.totalToDelete) to Review Album"
+        }
+        return "Delete \(viewModel.totalToDelete) Photos"
+    }
+
+    private var explanatoryCopy: String {
+        if isHoldForReview {
+            return viewModel.isFolderScan
+                ? "These folder images will be left in place. Nothing on disk will be deleted, and disk files are not moved to a Photos album."
+                : "These photos will be added to a **\(BatchDeleteManager.reviewAlbumName)** album in Photos. They stay in your library; you can audit them later and delete from there."
+        }
+        return "Deleted photos move to **Recently Deleted** and can be recovered for 30 days. File-system images move to the macOS Trash."
+    }
+
+    private var estimatedSpaceLabel: String {
+        isHoldForReview ? "Potential space to free" : "Estimated space freed"
+    }
+
     var body: some View {
         VStack(spacing: 24) {
             Image(systemName: isHoldForReview ? "tray.full" : "trash.circle.fill")
                 .font(.system(size: 64))
                 .foregroundStyle(isHoldForReview ? .blue : .red)
 
-            // "Move to Review Album" (not "Stage") so this hold-for-review flow —
-            // which copies photos into a Photos album for manual auditing — doesn't
-            // collide with the app's local "Set Aside" staging vocabulary.
-            Text(isHoldForReview ? "Move to Review Album" : "Confirm Deletion")
+            // Library hold mode says "Move to Review Album" (not "Stage") so it
+            // doesn't collide with the app's local "Set Aside" vocabulary.
+            Text(title)
                 .font(.title2.bold())
 
             statsGrid
 
-            if isHoldForReview {
-                Text("These photos will be added to a **\(BatchDeleteManager.reviewAlbumName)** album in Photos. They stay in your library; you can audit them later and delete from there.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            } else {
-                Text("Deleted photos move to **Recently Deleted** and can be recovered for 30 days. File-system images move to the macOS Trash.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            Text(LocalizedStringKey(explanatoryCopy))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             HStack(spacing: 14) {
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
 
-                Button(isHoldForReview ? "Move \(viewModel.totalToDelete) to Review Album" : "Delete \(viewModel.totalToDelete) Photos") {
+                Button(primaryButtonLabel) {
                     dismiss()
                     Task { await viewModel.confirmDelete() }
                 }
@@ -54,7 +75,7 @@ struct ConfirmDeleteSheet: View {
 
     private var statsGrid: some View {
         VStack(spacing: 0) {
-            statRow("Photos to delete", "\(viewModel.totalToDelete)")
+            statRow(isHoldForReview ? "Photos selected" : "Photos to delete", "\(viewModel.totalToDelete)")
             Divider()
             // Staged groups keep their keepers too — the flush only deletes
             // each group's itemsToDelete — so they count as kept groups here.
@@ -62,7 +83,7 @@ struct ConfirmDeleteSheet: View {
             statRow("Groups to keep", "\(viewModel.groups.count + viewModel.stagedGroups.count)")
             Divider()
             statRow(
-                "Estimated space freed",
+                estimatedSpaceLabel,
                 ByteCountFormatter.string(fromByteCount: viewModel.estimatedFreedBytes, countStyle: .file)
             )
         }

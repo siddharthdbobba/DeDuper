@@ -30,7 +30,7 @@ enum DeletionMode {
 
     /// Photos library assets are *added* to a "PhotoDeduper Review" album so
     /// the user can audit them in Photos before manually deleting. File URLs
-    /// still go to the Trash because no equivalent staging exists on disk.
+    /// are left in place because no equivalent staging exists on disk.
     case holdForReview
 }
 
@@ -51,11 +51,29 @@ struct DeletionReceipt {
     let trashedFiles: [TrashedFile]
     /// Asset identifiers that were instead added to the review album.
     let stagedAssetIDs: [String]
+    /// File URLs left untouched in hold-for-review mode.
+    let heldFileCount: Int
     /// Number of file URLs that could NOT be trashed. Successes above are
     /// still valid; the ViewModel decides how to surface partial failure.
     let failedCount: Int
     /// localizedDescription of the first failure, for user-facing messaging.
     let firstFailureDescription: String?
+
+    init(
+        trashedAssetIDs: [String],
+        trashedFiles: [TrashedFile],
+        stagedAssetIDs: [String],
+        heldFileCount: Int = 0,
+        failedCount: Int,
+        firstFailureDescription: String?
+    ) {
+        self.trashedAssetIDs = trashedAssetIDs
+        self.trashedFiles = trashedFiles
+        self.stagedAssetIDs = stagedAssetIDs
+        self.heldFileCount = heldFileCount
+        self.failedCount = failedCount
+        self.firstFailureDescription = firstFailureDescription
+    }
 
     /// Ready-made error copy for the nothing-succeeded case, shared by both
     /// delete paths (per-group and confirm-all) so the wording can't drift.
@@ -129,23 +147,24 @@ enum BatchDeleteManager {
                 trashedAssetIDs: assets.map(\.localIdentifier),
                 trashedFiles: result.trashed,
                 stagedAssetIDs: [],
+                heldFileCount: 0,
                 failedCount: result.failures.count,
                 firstFailureDescription: result.failures.first?.localizedDescription
             )
 
         case .holdForReview:
-            // Add assets to the review album; do not delete. File URLs still go
-            // to Trash — there's no equivalent staging concept for disk files.
+            // Add assets to the review album; do not delete. File URLs stay
+            // untouched because there's no equivalent staging concept on disk.
             if !assets.isEmpty {
                 try await addToReviewAlbum(assets)
             }
-            let result = trashFiles(urls, folderScope: folderScope)
             return DeletionReceipt(
                 trashedAssetIDs: [],
-                trashedFiles: result.trashed,
+                trashedFiles: [],
                 stagedAssetIDs: assets.map(\.localIdentifier),
-                failedCount: result.failures.count,
-                firstFailureDescription: result.failures.first?.localizedDescription
+                heldFileCount: urls.count,
+                failedCount: 0,
+                firstFailureDescription: nil
             )
         }
     }
