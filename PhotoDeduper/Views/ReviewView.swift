@@ -229,11 +229,18 @@ struct ReviewView: View {
 #endif
             // Each handler below is guarded with `faceToFaceGroupID == nil`:
             // while the overlay is up these shortcuts must not act invisibly
-            // behind it (`d` would stage the selected group!), so swallow the
-            // key (`.handled` no-op) instead of acting on it.
+            // behind it (`d` would delete the selected group, Return would set
+            // it aside!), so swallow the key (`.handled` no-op) instead of
+            // acting on it.
+            // Return = archive (set aside) the selected group. `stageGroup`
+            // itself advances selection to the next group, so this is the
+            // one-key "this group's fine, set it aside and move on" of the
+            // review flow. (Return was the plain "next group" key; that role is
+            // fully covered by j/k and ↓/↑, so Return now owns archive — it
+            // replaced the old `a` shortcut.)
             .onKeyPress(.return) {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
-                viewModel.selectNextGroup(); return .handled
+                stageCurrent(); return .handled
             }
             .onKeyPress(.downArrow) {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
@@ -250,10 +257,6 @@ struct ReviewView: View {
             .onKeyPress("k") {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
                 viewModel.selectPreviousGroup(); return .handled
-            }
-            .onKeyPress("a") {
-                guard viewModel.faceToFaceGroupID == nil else { return .handled }
-                stageCurrent(); return .handled
             }
             .onKeyPress("d") {
                 guard viewModel.faceToFaceGroupID == nil else { return .handled }
@@ -538,11 +541,6 @@ struct ReviewView: View {
         .disabled(viewModel.totalToDelete == 0)
     }
 
-    /// Stages the selected group (`d` key). Deliberately NO confirmation
-    /// dialog, even when the "Confirm before delete" setting is ON: staging is
-    /// non-destructive (nothing leaves the library or disk), and the final
-    /// toolbar flush keeps its confirmation — gating the harmless step too
-    /// would just reintroduce the per-group friction staging exists to remove.
     /// Pre-decodes full-size (1400px) images for the selected group and a small
     /// window of neighbors, so arriving at a not-yet-visited group doesn't stall
     /// on a cold decode. The window is bounded (replaced as selection moves) so
@@ -570,6 +568,12 @@ struct ReviewView: View {
         }
     }
 
+    /// Sets the selected group aside (the Return shortcut and the "Set Aside N"
+    /// button). Deliberately NO confirmation dialog, even when "Confirm before
+    /// delete" is ON: staging is non-destructive (nothing leaves the library or
+    /// disk), and the final toolbar flush keeps its confirmation — gating the
+    /// harmless step would just reintroduce the per-group friction staging
+    /// exists to remove.
     private func stageCurrent() {
         guard let id = viewModel.selectedGroupID,
               let group = viewModel.groups.first(where: { $0.id == id }),
@@ -823,7 +827,7 @@ struct GroupDetailView: View {
             // appear on regular (Mac) width — on compact (iPhone) there's no ⌘ and
             // no keyboard, so advertising either would be a lie.
             Text(horizontalSizeClass != .compact
-                 ? "Tap photos to keep them — anything you don't keep is removed. ⌘-click a photo to keep only that one. Press F for side-by-side, A to set aside, D to delete."
+                 ? "Tap photos to keep them — anything you don't keep is removed. ⌘-click a photo to keep only that one. Press F for side-by-side, Return to set aside, D to delete."
                  : "Tap photos to keep them — anything you don't keep is removed.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -858,7 +862,7 @@ struct GroupDetailView: View {
                         .font(.subheadline)
                 }
                 .buttonStyle(.bordered)
-                .help("Set aside for deletion — nothing is deleted until you click Delete in the toolbar")
+                .help("Set aside for deletion (Return) — nothing is deleted until you click Delete in the toolbar")
 
                 // Delete just this group now (vs. the toolbar flush which deletes
                 // every group + everything set aside). Stays in review afterwards.
@@ -1028,11 +1032,10 @@ private struct ShortcutLegend: View {
     /// → inspect → undo/dismiss.
     private let rows: [(action: String, keys: String)] = [
         ("Next / previous group", "J / K  or  ↓ / ↑"),
-        ("Next group", "Return"),
         ("Keep photo 1–9", "1 – 9"),
         ("Keep one (the rest are removed)", "Tap"),
         ("Keep several", "⌘-click"),
-        ("Archive (set aside) group", "A"),
+        ("Archive (set aside) group", "Return"),
         ("Delete selected group now", "D"),
         ("Side-by-side compare", "F"),
         ("Full-size view", "Double-click"),

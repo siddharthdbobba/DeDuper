@@ -18,10 +18,10 @@ Main two-pane layout shown during `.reviewing` state.
 
 - **Sidebar**: `List` of `GroupRow` items; drives `viewModel.selectedGroupID`. When groups are staged, a footer shows "N staged" with a Restore button (`restoreStagedGroups()`)
 - **Detail**: `GroupDetailView` for the selected group
-- Per-group actions (`d` key, "Stage N" button) only *stage* a group via `viewModel.stageGroup` — no confirmation dialog, since staging is non-destructive. Actual deletion happens only via the toolbar "Delete N Photos" flush (one PhotoKit request → one macOS system prompt per session)
+- Per-group **Set Aside** (Return key, "Set Aside N" button) only *stages* a group via `viewModel.stageGroup` — no confirmation dialog, since staging is non-destructive. Per-group **Delete** (`d` key, "Delete N" button) removes that group's extras immediately (recoverable, optional confirmation). The toolbar "Delete N Photos" flush deletes everything staged + remaining in one PhotoKit request → one macOS system prompt per session
 
 **`GroupDetailView`** renders:
-- Header with photo count, the on-device "Why this one?" explanation (if present), and Face-to-Face / Stage actions
+- Header with photo count, the on-device "Why this one?" explanation (if present), and Face-to-Face / Set Aside / Delete actions
 - `LazyVGrid` of `PhotoCard` views — passes `group.displayScores[i]` (not raw scores)
 
 ### `PhotoCard.swift`

@@ -31,7 +31,7 @@ idle → scanning(progress, message) → reviewing / error(message)
 | `startFolderScan(url:)` | Scan a local folder |
 | `selectKeeper(groupID:itemIndex:)` | User picks the keeper for a group |
 | `toggleKeep(groupID:itemIndex:)` | Toggle an individual photo in/out of the keep set |
-| `stageGroup(groupID:)` | Move a group from `groups` to `stagedGroups` — local only, no PhotoKit/file I/O (`d` key, "Stage N" button) |
+| `stageGroup(groupID:)` | Move a group from `groups` to `stagedGroups` — local only, no PhotoKit/file I/O (Return key, "Set Aside N" button) |
 | `restoreStagedGroups()` | Move all staged groups back into `groups` (sidebar "Restore") |
 | `confirmDelete()` | Flush staged + remaining groups in ONE `BatchDeleteManager` call → one macOS delete prompt per session |
 | `reset()` | Return to idle |

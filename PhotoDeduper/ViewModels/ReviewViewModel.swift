@@ -744,7 +744,7 @@ final class ReviewViewModel: ObservableObject {
     /// everything in ONE PhotoKit request — one system prompt per session.
     func stageGroup(groupID: UUID) {
         // Defer the @Published mutations to a fresh runloop tick: this is
-        // reachable from an onKeyPress handler (`d`), which can fire while
+        // reachable from an onKeyPress handler (Return), which can fire while
         // SwiftUI is mid view-update — a synchronous write here trips
         // "Publishing changes from within view updates" (same rationale as
         // `selectGroup(offset:)`). The groupID lookup also happens inside the
@@ -775,8 +775,8 @@ final class ReviewViewModel: ObservableObject {
 
     /// Stages EVERY remaining live group in one shot (the toolbar "Set Aside
     /// All" action) — the bulk counterpart to per-group `stageGroup`. For a
-    /// user who trusts the proposed keepers across many groups, walking them
-    /// one `d` at a time is pure friction; this empties the live list into
+    /// user who trusts the proposed keepers across many groups, setting them
+    /// aside one Return at a time is pure friction; this empties the live list into
     /// `stagedGroups` so they can flush the whole session with a single
     /// "Delete N Photos". Still a pure local state move: like `stageGroup`,
     /// nothing touches PhotoKit or the file system until `confirmDelete`.
