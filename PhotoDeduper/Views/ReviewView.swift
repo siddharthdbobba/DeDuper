@@ -513,8 +513,24 @@ struct ReviewView: View {
                     .foregroundStyle(.blue)
                 Text("All groups reviewed")
                     .font(.title3.bold())
-                Text("Click Delete \(viewModel.totalToDelete) Photos to finish in one go.")
-                    .foregroundStyle(.secondary)
+                if viewModel.totalToDelete > 0 {
+                    Text("Click Delete \(viewModel.totalToDelete) Photos to finish in one go.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    // Everything set aside was KEPT (nothing marked for deletion),
+                    // so there's nothing to flush and the toolbar's "Delete 0
+                    // Photos" is disabled. Offer a direct finish here instead of
+                    // stranding the user on an impossible call-to-action.
+                    Text("You kept everything — nothing to delete.")
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Button("Done") { viewModel.reset() }
+                            .buttonStyle(.borderedProminent)
+                        Button("Scan Again") { viewModel.rescan() }
+                            .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
     }
@@ -844,7 +860,12 @@ struct GroupDetailView: View {
                 Text("\(group.items.count) similar photos — keep \(group.keptIndices.count), delete \(group.itemsToDelete.count)")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-                detailActionRow(group: group)
+                // Up to five buttons (Face-to-Face, Keep All, Delete All, Set
+                // Aside, Delete) won't fit a narrow/compact width in a plain
+                // HStack, so let the row scroll horizontally instead of clipping.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    detailActionRow(group: group)
+                }
             } else {
                 HStack(spacing: 8) {
                     Text("\(group.items.count) similar photos — keep \(group.keptIndices.count), delete \(group.itemsToDelete.count)")
@@ -854,7 +875,11 @@ struct GroupDetailView: View {
                 }
             }
 
-            if let local = group.localExplanation {
+            // Only while the proposed keeper is actually kept — after Delete All
+            // (no mandatory keepers) nothing is kept, so "Why this one?" would
+            // point at a photo that's now marked for deletion.
+            if let local = group.localExplanation,
+               group.keptIndices.contains(group.proposedKeeperIndex) {
                 explanationCard(icon: "eye.fill", color: .blue, label: "Why this one?", text: local)
             }
 
