@@ -49,7 +49,7 @@ class PhotoScorer {
             while next < limit {
                 let index = next
                 let item = items[index]
-                group.addTask { (index, await self.evaluate(item)) }
+                group.addTask { (index, await self.evaluate(item, timeoutSeconds: Self.perItemTimeout)) }
                 next += 1
             }
             var results = [(Int, PhotoQuality)]()
@@ -62,11 +62,43 @@ class PhotoScorer {
                 if next < items.count {
                     let index = next
                     let item = items[index]
-                    group.addTask { (index, await self.evaluate(item)) }
+                    group.addTask { (index, await self.evaluate(item, timeoutSeconds: Self.perItemTimeout)) }
                     next += 1
                 }
             }
             return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+        }
+    }
+
+    /// Hard per-item ceiling so a single pathological asset can never freeze the
+    /// whole scan. `evaluate` awaits a thumbnail decode plus two Vision passes
+    /// and, for videos, a synchronous `AVAssetImageGenerator` frame grab — none
+    /// of which carry their own timeout. Because `evaluateGroup` (and the
+    /// sequential group loop in `runPipeline`) block until every item finishes,
+    /// one wedged item would otherwise pin the progress bar forever (the
+    /// "stuck at N%" stall). This value is deliberately generous — far above any
+    /// legitimate per-item scoring time — so it never trips on a merely slow but
+    /// healthy asset (large RAW, high-res video keyframe).
+    static let perItemTimeout: Double = 20
+
+    /// `evaluate` wrapped in a watchdog. Whichever finishes first wins: a real
+    /// evaluation yields the quality; the timer yields `nil`, which we map to
+    /// `.undecodable` so `runPipeline` keeps the item (never auto-deletes it) and
+    /// the scan proceeds instead of hanging. The abandoned `evaluate` task is
+    /// cancelled; if its underlying Vision/AVFoundation work ignores cancellation
+    /// it simply finishes in the background and its result is dropped.
+    private func evaluate(_ item: PhotoItem, timeoutSeconds: Double) async -> PhotoQuality {
+        await withTaskGroup(of: PhotoQuality?.self) { group in
+            group.addTask { await self.evaluate(item) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                return nil
+            }
+            // Two tasks are queued, so `next()` is non-nil; collapse the outer
+            // optional and treat a nil inner value as "timed out".
+            let winner = (await group.next()) ?? nil
+            group.cancelAll()
+            return winner ?? .undecodable
         }
     }
 
