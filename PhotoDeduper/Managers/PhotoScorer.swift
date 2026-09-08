@@ -22,6 +22,39 @@ struct PhotoQuality {
 
 class PhotoScorer {
 
+    /// Consecutive per-item watchdog timeouts, and the latch they trip.
+    ///
+    /// A working watchdog alone isn't enough when Vision itself is jammed
+    /// system-wide (mediaanalysisd/ANE saturated — e.g. a bulk photo import
+    /// running alongside the scan). Every item would then burn the full
+    /// `perItemTimeout`, turning a few-minute scan into hours of timeouts.
+    /// After `timeoutsBeforeGivingUpOnVision` consecutive timeouts we stop
+    /// asking Vision anything for the rest of the scan and score on Core Image
+    /// sharpness/exposure alone — the same fallback path already used on OS
+    /// versions without the aesthetics model. Any success resets the counter.
+    private let stateLock = NSLock()
+    private var consecutiveTimeouts = 0
+    private var visionDisabled = false
+
+    static let timeoutsBeforeGivingUpOnVision = 3
+
+    /// True once the Vision circuit breaker has tripped.
+    private var isVisionDisabled: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return visionDisabled
+    }
+
+    private func recordTimeout() {
+        stateLock.lock(); defer { stateLock.unlock() }
+        consecutiveTimeouts += 1
+        if consecutiveTimeouts >= Self.timeoutsBeforeGivingUpOnVision { visionDisabled = true }
+    }
+
+    private func recordSuccess() {
+        stateLock.lock(); defer { stateLock.unlock() }
+        consecutiveTimeouts = 0
+    }
+
     /// Shared `CIContext` reused across every `evaluate` call. A `CIContext` is
     /// expensive to construct (it allocates GPU/Metal state) and is thread-safe,
     /// so we build it once instead of per-photo.
@@ -82,23 +115,35 @@ class PhotoScorer {
     static let perItemTimeout: Double = 20
 
     /// `evaluate` wrapped in a watchdog. Whichever finishes first wins: a real
-    /// evaluation yields the quality; the timer yields `nil`, which we map to
-    /// `.undecodable` so `runPipeline` keeps the item (never auto-deletes it) and
-    /// the scan proceeds instead of hanging. The abandoned `evaluate` task is
-    /// cancelled; if its underlying Vision/AVFoundation work ignores cancellation
-    /// it simply finishes in the background and its result is dropped.
+    /// evaluation yields the quality; the timer yields `.undecodable`, which
+    /// `runPipeline` always keeps and never auto-deletes, so the scan proceeds
+    /// instead of hanging.
+    ///
+    /// This deliberately races two *unstructured* tasks against a shared
+    /// one-shot continuation rather than using `withTaskGroup`. A task group
+    /// implicitly awaits its remaining children when the body returns, so the
+    /// previous group-based version could not actually escape a wedged item: the
+    /// timer won the race, and then `withTaskGroup` blocked on the very
+    /// evaluation it was supposed to abandon. Unstructured tasks have no such
+    /// join — the first `resume` returns to the caller and the loser finishes (or
+    /// never finishes) in the background with its result discarded.
     private func evaluate(_ item: PhotoItem, timeoutSeconds: Double) async -> PhotoQuality {
-        await withTaskGroup(of: PhotoQuality?.self) { group in
-            group.addTask { await self.evaluate(item) }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
-                return nil
+        await withCheckedContinuation { (continuation: CheckedContinuation<PhotoQuality, Never>) in
+            let once = ResumeOnce(continuation)
+            let work = Task { await self.evaluate(item) }
+            Task {
+                let quality = await work.value
+                self.recordSuccess()
+                once.resume(with: quality)
             }
-            // Two tasks are queued, so `next()` is non-nil; collapse the outer
-            // optional and treat a nil inner value as "timed out".
-            let winner = (await group.next()) ?? nil
-            group.cancelAll()
-            return winner ?? .undecodable
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                self.recordTimeout()
+                once.resume(with: .undecodable)
+                // Best-effort: Vision/AVFoundation may ignore cancellation, but
+                // the caller is already free either way.
+                work.cancel()
+            }
         }
     }
 
@@ -153,10 +198,19 @@ class PhotoScorer {
         // aesthetics is the whole-image quality model (macOS 15+/iOS 18+), nil on
         // the iOS 17 build / macOS 14, where we fall back to the technical-only
         // weighting below.
-        async let faceTask = FaceAnalyzer.analyze(cgImage)
-        async let aestheticsTask = AestheticsScorer.score(ci)
-        let face = await faceTask
-        let aesthetics = await aestheticsTask
+        let face: FaceAnalyzer.Result
+        let aesthetics: Double?
+        if isVisionDisabled {
+            // Circuit breaker tripped — Vision is not answering. Score on the
+            // technical metrics only rather than waiting out another timeout.
+            face = FaceAnalyzer.noFaces
+            aesthetics = nil
+        } else {
+            async let faceTask = FaceAnalyzer.analyze(cgImage)
+            async let aestheticsTask = AestheticsScorer.score(ci)
+            face = await faceTask
+            aesthetics = await aestheticsTask
+        }
 
         // Weighting — goal is the best OVERALL photo, not the most-open eyes.
         //   - When the aesthetics model is available it leads the decision; eye

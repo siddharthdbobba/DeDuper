@@ -189,7 +189,7 @@ class PhotoLibraryManager {
             if item.isVideo {
                 return await loadVideoThumbnail(url, size: size)
             }
-            return loadFileThumbnail(url, size: size)
+            return await loadFileThumbnail(url, size: size)
         }
     }
 
@@ -215,7 +215,15 @@ class PhotoLibraryManager {
         }
     }
 
-    private static func loadFileThumbnail(_ url: URL, size: CGSize) -> CGImage? {
+    /// `CGImageSourceCreateThumbnailAtIndex` is synchronous, decodes on the
+    /// calling thread, and can sit in disk I/O for a long time on a large RAW or
+    /// a file on slow storage. Run it off the cooperative pool (see
+    /// `BlockingWork`) so it can never park a Swift-concurrency thread.
+    private static func loadFileThumbnail(_ url: URL, size: CGSize) async -> CGImage? {
+        await BlockingWork.run { decodeFileThumbnail(url, size: size) }
+    }
+
+    private static func decodeFileThumbnail(_ url: URL, size: CGSize) -> CGImage? {
         // Don't gate on the return value. These are CHILD file URLs enumerated
         // from a security-scoped folder; they are not themselves security-scoped,
         // so `startAccessingSecurityScopedResource()` returns false for them even
@@ -238,8 +246,12 @@ class PhotoLibraryManager {
     }
 
     /// Generates a still thumbnail from a video file (single keyframe near the start).
+    /// `AVAssetImageGenerator.copyCGImage` is synchronous and carries no
+    /// timeout. `Task.detached` does NOT get it off the cooperative pool —
+    /// detached tasks run there too — so route it through `BlockingWork`, whose
+    /// Dispatch queue is safe to block.
     private static func loadVideoThumbnail(_ url: URL, size: CGSize) async -> CGImage? {
-        await Task.detached(priority: .userInitiated) {
+        await BlockingWork.run {
             let didStart = url.startAccessingSecurityScopedResource()
             defer { if didStart { url.stopAccessingSecurityScopedResource() } }
 
@@ -251,7 +263,7 @@ class PhotoLibraryManager {
             // Half-second in; some files have a black first frame.
             let time = CMTime(seconds: 0.5, preferredTimescale: 600)
             return try? generator.copyCGImage(at: time, actualTime: nil)
-        }.value
+        }
     }
 
     // MARK: - Private helpers
